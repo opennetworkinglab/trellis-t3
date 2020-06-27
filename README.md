@@ -8,3 +8,9 @@ docker run -it --rm -v $HOME/.m2:/root/.m2 -v $PWD:/root/trellis-t3 -w /root/tre
 ```
 
 The OAR file can be located under `app/target`
+
+## Install
+
+```
+onos-app <ip>:<port> install! app/target/t3-app-<x.y.z>.oar
+```
