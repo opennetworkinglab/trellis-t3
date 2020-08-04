@@ -25,8 +25,9 @@ import java.util.Objects;
 
 /**
  * Class to represent the groups in a device for a given output and packet.
+ * @deprecated in t3-4.0
  */
-//FIXME consider name change.
+@Deprecated
 public class GroupsInDevice {
 
     private ConnectPoint output;

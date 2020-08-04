@@ -67,7 +67,7 @@ public class FlowNib extends AbstractNib {
                 .filter(flow -> flow.state() == flowState
                         && flow.deviceId().equals(deviceId))
                 .collect(Collectors.toSet());
-        return flowsFiltered != null ? ImmutableSet.copyOf(flowsFiltered) : ImmutableSet.of();
+        return ImmutableSet.copyOf(flowsFiltered);
     }
 
     /**

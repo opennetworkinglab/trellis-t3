@@ -56,6 +56,21 @@ public class GroupNib extends AbstractNib {
     }
 
     /**
+     * Returns all groups associated with the given device and filtered by the group state.
+     *
+     * @param deviceId device ID to get groups for
+     * @param groupState the group state
+     * @return iterable of device's groups
+     */
+    public Iterable<Group> getGroupsByState(DeviceId deviceId, Group.GroupState groupState) {
+        Set<Group> groupsFiltered = groups.stream()
+                .filter(group -> group.state() == groupState
+                        && group.deviceId().equals(deviceId))
+                .collect(Collectors.toSet());
+        return ImmutableSet.copyOf(groupsFiltered);
+    }
+
+    /**
      * Returns all groups associated with the given device.
      *
      * @param deviceId device ID to get groups for
@@ -63,9 +78,9 @@ public class GroupNib extends AbstractNib {
      */
     public Iterable<Group> getGroups(DeviceId deviceId) {
         Set<Group> groupsFiltered = groups.stream()
-                .filter(g -> g.deviceId().equals(deviceId))
+                .filter(group -> group.deviceId().equals(deviceId))
                 .collect(Collectors.toSet());
-        return groupsFiltered != null ? ImmutableSet.copyOf(groupsFiltered) : ImmutableSet.of();
+        return ImmutableSet.copyOf(groupsFiltered);
     }
 
     /**

@@ -84,6 +84,14 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- ONOS drivers -->
+        <dependency>
+            <groupId>org.onosproject</groupId>
+            <artifactId>onos-drivers-default</artifactId>
+            <version>${onos.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Other Trellis apps -->
         <dependency>
             <groupId>org.onosproject</groupId>

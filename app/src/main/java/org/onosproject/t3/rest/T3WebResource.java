@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.onlab.packet.EthType;
 import org.onlab.packet.IpPrefix;
 import org.onlab.packet.VlanId;
+import org.onlab.util.Generator;
 import org.onosproject.net.ConnectPoint;
 import org.onosproject.net.HostId;
 import org.onosproject.net.flow.FlowEntry;
@@ -47,6 +48,8 @@ import javax.ws.rs.core.Response;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 import static org.slf4j.LoggerFactory.getLogger;
 
@@ -153,13 +156,16 @@ public class T3WebResource extends AbstractWebResource {
         final ObjectNode nodeOutput = mapper.createObjectNode();
         nodeOutput.put("title", "Tracing all Multicast routes in the System");
 
-        //Create the generator for the list of traces.
-        List<Set<StaticPacketTrace>> generator = troubleshootService.getMulitcastTrace(VlanId.vlanId("None"));
+        // FIXME Vlan as argument and use None if not present
+        // Create the generator for the list of traces.
+        Generator<Set<StaticPacketTrace>> gen = troubleshootService.traceMcast(VlanId.NONE);
+        List<Set<StaticPacketTrace>> multicastTraceList = StreamSupport.stream(gen.spliterator(),
+                false).collect(Collectors.toList());
         int totalTraces = 0;
         List<StaticPacketTrace> failedTraces = new ArrayList<>();
         StaticPacketTrace previousTrace = null;
         ArrayNode traceArray = mapper.createArrayNode();
-        for (Set<StaticPacketTrace> traces : generator) {
+        for (Set<StaticPacketTrace> traces : multicastTraceList) {
             ObjectNode genNode = mapper.createObjectNode();
             totalTraces++;
             //Print also Route if possible or packet
@@ -321,6 +327,10 @@ public class T3WebResource extends AbstractWebResource {
      * @param trace the trace
      * @return a json representing the trace.
      */
+    // FIXME This part is completely broken, it will work only if the path size is 1
+    // Plan is to redefine the data model and uses arrays when printing each hop.
+    // In general there is a lot of confusion and the data model is not very clear
+    // and not easy to parse.
     private ObjectNode getTrace(StaticPacketTrace trace, boolean verbose) {
 
         ObjectNode nodeOutput = mapper.createObjectNode();
@@ -378,6 +388,7 @@ public class T3WebResource extends AbstractWebResource {
     }
 
     //Return groups Object for a given trace and a specified level of verbosity
+    // FIXME Double check
     private ObjectNode getGroupObj(ConnectPoint connectPoint, GroupsInDevice output, boolean verbose) {
         ArrayNode groupArray = mapper.createArrayNode();
         ObjectNode groupsObj = mapper.createObjectNode();
@@ -402,6 +413,7 @@ public class T3WebResource extends AbstractWebResource {
     }
 
     //Return flows Object for a given trace and a specified level of verbosity
+    // FIXME Double check
     private ArrayNode getFlowArray(StaticPacketTrace trace, ConnectPoint connectPoint, boolean verbose) {
         ArrayNode flowArray = mapper.createArrayNode();
         trace.getFlowsForDevice(connectPoint.deviceId()).forEach(f -> {

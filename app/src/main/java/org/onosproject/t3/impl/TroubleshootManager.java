@@ -21,25 +21,32 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
+import com.google.common.collect.Maps;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.onlab.packet.IpAddress;
 import org.onlab.packet.VlanId;
+import org.onlab.util.Generator;
 import org.onosproject.cluster.NodeId;
+
 import org.onosproject.net.ConnectPoint;
+import org.onosproject.net.DataPlaneEntity;
+import org.onosproject.net.Device;
 import org.onosproject.net.DeviceId;
 import org.onosproject.net.Host;
 import org.onosproject.net.HostId;
 import org.onosproject.net.Link;
+import org.onosproject.net.PipelineTraceableHitChain;
+import org.onosproject.net.PipelineTraceableInput;
+import org.onosproject.net.PipelineTraceableOutput;
+import org.onosproject.net.PipelineTraceableOutput.PipelineTraceableResult;
 import org.onosproject.net.Port;
 import org.onosproject.net.PortNumber;
+import org.onosproject.net.behaviour.PipelineTraceable;
 import org.onosproject.net.config.ConfigException;
 import org.onosproject.net.config.basics.InterfaceConfig;
 import org.onosproject.net.flow.DefaultTrafficSelector;
 import org.onosproject.net.flow.FlowEntry;
-import org.onosproject.net.flow.FlowRule;
-import org.onosproject.net.flow.IndexTableId;
-import org.onosproject.net.flow.TableId;
 import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.net.flow.criteria.Criteria;
 import org.onosproject.net.flow.criteria.Criterion;
@@ -47,12 +54,7 @@ import org.onosproject.net.flow.criteria.EthCriterion;
 import org.onosproject.net.flow.criteria.EthTypeCriterion;
 import org.onosproject.net.flow.criteria.IPCriterion;
 import org.onosproject.net.flow.criteria.VlanIdCriterion;
-import org.onosproject.net.flow.instructions.Instruction;
-import org.onosproject.net.flow.instructions.Instructions;
-import org.onosproject.net.flow.instructions.Instructions.OutputInstruction;
-import org.onosproject.net.flow.instructions.L2ModificationInstruction;
 import org.onosproject.net.group.Group;
-import org.onosproject.net.group.GroupBucket;
 import org.onosproject.net.host.InterfaceIpAddress;
 import org.onosproject.net.intf.Interface;
 import org.onosproject.routeservice.ResolvedRoute;
@@ -62,7 +64,6 @@ import org.onosproject.t3.api.DriverNib;
 import org.onosproject.t3.api.EdgePortNib;
 import org.onosproject.t3.api.FlowNib;
 import org.onosproject.t3.api.GroupNib;
-import org.onosproject.t3.api.GroupsInDevice;
 import org.onosproject.t3.api.HostNib;
 import org.onosproject.t3.api.LinkNib;
 import org.onosproject.t3.api.MastershipNib;
@@ -75,27 +76,20 @@ import org.onosproject.t3.api.TroubleshootService;
 import org.osgi.service.component.annotations.Component;
 import org.slf4j.Logger;
 
-import java.net.UnknownHostException;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashSet;
+import java.util.Map;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
+import java.util.HashSet;
+import java.util.Optional;
+import java.util.ArrayList;
+import java.util.Collections;
+
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 import static org.onlab.packet.EthType.EtherType;
 import static org.onosproject.net.flow.TrafficSelector.Builder;
-import static org.onosproject.net.flow.instructions.Instructions.GroupInstruction;
-import static org.onosproject.net.flow.instructions.L2ModificationInstruction.ModEtherInstruction;
-import static org.onosproject.net.flow.instructions.L2ModificationInstruction.ModMplsHeaderInstruction;
-import static org.onosproject.net.flow.instructions.L2ModificationInstruction.ModMplsLabelInstruction;
-import static org.onosproject.net.flow.instructions.L2ModificationInstruction.ModVlanIdInstruction;
-import static org.onosproject.t3.impl.TroubleshootUtils.compareMac;
 import static org.slf4j.LoggerFactory.getLogger;
 
 /**
@@ -123,6 +117,9 @@ public class TroubleshootManager implements TroubleshootService {
     protected NetworkConfigNib networkConfigNib = NetworkConfigNib.getInstance();
     protected MulticastRouteNib mcastRouteNib = MulticastRouteNib.getInstance();
 
+    // FIXME Revisit offline mode after a first implementation
+    private final Map<DeviceId, PipelineTraceable> pipelineTraceables = Maps.newConcurrentMap();
+
     @Override
     public boolean checkNibValidity() {
         return Stream.of(flowNib, groupNib, linkNib, hostNib, deviceNib, driverNib,
@@ -143,32 +140,6 @@ public class TroubleshootManager implements TroubleshootService {
                 });
 
         return summary.append(StringUtils.rightPad("", 125, '-')).toString();
-    }
-
-    @Override
-    public List<StaticPacketTrace> pingAll(EtherType type) {
-        ImmutableList.Builder<StaticPacketTrace> tracesBuilder = ImmutableList.builder();
-        hostNib.getHosts().forEach(host -> {
-            List<IpAddress> ipAddresses = getIpAddresses(host, type, false);
-            if (ipAddresses.size() > 0) {
-                //check if the host has only local IPs of that ETH type
-                boolean onlyLocalSrc = ipAddresses.size() == 1 && ipAddresses.get(0).isLinkLocal();
-                hostNib.getHosts().forEach(hostToPing -> {
-                    List<IpAddress> ipAddressesToPing = getIpAddresses(hostToPing, type, false);
-                    //check if the other host has only local IPs of that ETH type
-                    boolean onlyLocalDst = ipAddressesToPing.size() == 1 && ipAddressesToPing.get(0).isLinkLocal();
-                    boolean sameLocation = Sets.intersection(host.locations(), hostToPing.locations()).size() > 0;
-                    //Trace is done only if they are both local and under the same location
-                    // or not local and if they are not the same host.
-                    if (((sameLocation && onlyLocalDst && onlyLocalSrc) ||
-                            (!onlyLocalSrc && !onlyLocalDst && ipAddressesToPing.size() > 0))
-                            && !host.equals(hostToPing)) {
-                        tracesBuilder.addAll(trace(host.id(), hostToPing.id(), type));
-                    }
-                });
-            }
-        });
-        return tracesBuilder.build();
     }
 
     @Override
@@ -267,6 +238,32 @@ public class TroubleshootManager implements TroubleshootService {
             failTrace.addResultMessage("Can't get config " + e.getMessage());
             return ImmutableSet.of(failTrace);
         }
+    }
+
+    private PipelineTraceable getPipelineMatchable(DeviceId deviceId) {
+        return pipelineTraceables.compute(deviceId, (k, v) -> {
+            if (v == null) {
+                log.info("PipelineMatchable not found for {}", deviceId);
+                Device d = deviceNib.getDevice(deviceId);
+                if (d.is(PipelineTraceable.class)) {
+                    v = d.as(PipelineTraceable.class);
+                    v.init();
+                } else {
+                    log.warn("PipelineMatchable behaviour not supported for device {}",
+                            deviceId);
+                }
+            }
+            return v;
+        });
+    }
+
+    private List<DataPlaneEntity> getDataPlaneEntities(DeviceId deviceId) {
+        List<DataPlaneEntity> dataPlaneEntities = Lists.newArrayList();
+        flowNib.getFlowEntriesByState(deviceId, FlowEntry.FlowEntryState.ADDED).forEach(entity ->
+                dataPlaneEntities.add(new DataPlaneEntity(entity)));
+        groupNib.getGroupsByState(deviceId, Group.GroupState.ADDED).forEach(entity ->
+                dataPlaneEntities.add(new DataPlaneEntity(entity)));
+        return dataPlaneEntities;
     }
 
     /**
@@ -392,14 +389,6 @@ public class TroubleshootManager implements TroubleshootService {
         return trace;
     }
 
-    @Override
-    public List<Set<StaticPacketTrace>> getMulitcastTrace(VlanId vlanId) {
-        Generator<Set<StaticPacketTrace>> gen = new McastGenerator(mcastRouteNib, this, vlanId);
-        List<Set<StaticPacketTrace>> multicastTraceList =
-                StreamSupport.stream(gen.spliterator(), false).collect(Collectors.toList());
-        return multicastTraceList;
-    }
-
     /**
      * Computes a trace for a give packet that start in the network at the given connect point.
      *
@@ -427,20 +416,24 @@ public class TroubleshootManager implements TroubleshootService {
         completePath.add(in);
 
         //If the trace has no outputs for the given input we stop here
-        if (trace.getGroupOuputs(in.deviceId()) == null) {
-            computePath(completePath, trace, null);
+        if (trace.getHitChains(in.deviceId()) == null) {
+            TroubleshootUtils.computePath(completePath, trace, null);
             trace.addResultMessage("No output out of device " + in.deviceId() + ". Packet is dropped");
             trace.setSuccess(false);
             return trace;
         }
 
         //If the trace has outputs we analyze them all
-        for (GroupsInDevice outputPath : trace.getGroupOuputs(in.deviceId())) {
+        for (PipelineTraceableHitChain outputPath : trace.getHitChains(in.deviceId())) {
 
-            ConnectPoint cp = outputPath.getOutput();
+            ConnectPoint cp = outputPath.getOutputPort();
             log.debug("Connect point in {}", in);
             log.debug("Output path {}", cp);
-            log.debug("{}", outputPath.getFinalPacket());
+            log.debug("{}", outputPath.getEgressPacket());
+
+            if (outputPath.isDropped()) {
+                continue;
+            }
 
             //Hosts for the the given output
             Set<Host> hostsList = hostNib.getConnectedHosts(cp);
@@ -448,34 +441,31 @@ public class TroubleshootManager implements TroubleshootService {
             Set<Host> hosts = getHosts(trace);
 
             if (in.equals(cp) && trace.getInitialPacket().getCriterion(Criterion.Type.VLAN_VID) != null &&
-                    outputPath.getFinalPacket().getCriterion(Criterion.Type.VLAN_VID) != null
+                    outputPath.getEgressPacket().getCriterion(Criterion.Type.VLAN_VID) != null
                     && ((VlanIdCriterion) trace.getInitialPacket().getCriterion(Criterion.Type.VLAN_VID)).vlanId()
-                    .equals(((VlanIdCriterion) outputPath.getFinalPacket().getCriterion(Criterion.Type.VLAN_VID))
+                    .equals(((VlanIdCriterion) outputPath.getEgressPacket().getCriterion(Criterion.Type.VLAN_VID))
                             .vlanId())) {
-                if (trace.getGroupOuputs(in.deviceId()).size() == 1 &&
-                        computePath(completePath, trace, outputPath.getOutput())) {
+                if (trace.getHitChains(in.deviceId()).size() == 1 &&
+                        TroubleshootUtils.computePath(completePath, trace, outputPath.getOutputPort())) {
                     trace.addResultMessage("Connect point out " + cp + " is same as initial input " + in);
                     trace.setSuccess(false);
                 }
             } else if (!Collections.disjoint(hostsList, hosts)) {
                 //If the two host collections contain the same item it means we reached the proper output
-                log.debug("Stopping here because host is expected destination {}, reached through", completePath);
-                if (computePath(completePath, trace, outputPath.getOutput())) {
+                log.debug("Stopping here because host is expected destination, reached through {}", completePath);
+                if (TroubleshootUtils.computePath(completePath, trace, outputPath.getOutputPort())) {
                     trace.addResultMessage("Reached required destination Host " + cp);
                     trace.setSuccess(true);
                 }
                 break;
-            } else if (cp.port().equals(PortNumber.CONTROLLER)) {
 
+            } else if (cp.port().equals(PortNumber.CONTROLLER)) {
                 //Getting the master when the packet gets sent as packet in
                 NodeId master = mastershipNib.getMasterFor(cp.deviceId());
                 // TODO if we don't need to print master node id, exclude mastership NIB which is used only here
                 trace.addResultMessage(PACKET_TO_CONTROLLER + " " + master.id());
-                computePath(completePath, trace, outputPath.getOutput());
-                handleVlanToController(outputPath, trace);
-
+                TroubleshootUtils.computePath(completePath, trace, outputPath.getOutputPort());
             } else if (linkNib.getEgressLinks(cp).size() > 0) {
-
                 //TODO this can be optimized if we use a Tree structure for paths.
                 //if we already have outputs let's check if the one we are considering starts from one of the devices
                 // in any of the ones we have.
@@ -513,7 +503,7 @@ public class TroubleshootManager implements TroubleshootService {
                     ConnectPoint dst = link.dst();
                     //change in-port to the dst link in port
                     Builder updatedPacket = DefaultTrafficSelector.builder();
-                    outputPath.getFinalPacket().criteria().forEach(updatedPacket::add);
+                    outputPath.getEgressPacket().criteria().forEach(updatedPacket::add);
                     updatedPacket.add(Criteria.matchInPort(dst.port()));
                     log.debug("DST Connect Point {}", dst);
                     //build the elements for that device
@@ -521,15 +511,15 @@ public class TroubleshootManager implements TroubleshootService {
                     //continue the trace along the path
                     getTrace(completePath, dst, trace, isDualHomed);
                 }
-            } else if (edgePortNib.isEdgePoint(outputPath.getOutput()) &&
+            } else if (edgePortNib.isEdgePoint(outputPath.getOutputPort()) &&
                     trace.getInitialPacket().getCriterion(Criterion.Type.ETH_DST) != null &&
                     ((EthCriterion) trace.getInitialPacket().getCriterion(Criterion.Type.ETH_DST))
                             .mac().isMulticast()) {
-                trace.addResultMessage("Packet is multicast and reached output " + outputPath.getOutput() +
+                trace.addResultMessage("Packet is multicast and reached output " + outputPath.getOutputPort() +
                         " which is enabled and is edge port");
                 trace.setSuccess(true);
-                computePath(completePath, trace, outputPath.getOutput());
-                if (!hasOtherOutput(in.deviceId(), trace, outputPath.getOutput())) {
+                TroubleshootUtils.computePath(completePath, trace, outputPath.getOutputPort());
+                if (!hasOtherOutput(in.deviceId(), trace, outputPath.getOutputPort())) {
                     return trace;
                 }
             } else if (deviceNib.getPort(cp) != null && deviceNib.getPort(cp).isEnabled()) {
@@ -538,9 +528,9 @@ public class TroubleshootManager implements TroubleshootService {
                 //We treat as correct output only if it's not LLDP or BDDP
                 if (!(ethTypeCriterion.ethType().equals(EtherType.LLDP.ethType())
                         && !ethTypeCriterion.ethType().equals(EtherType.BDDP.ethType()))) {
-                    if (computePath(completePath, trace, outputPath.getOutput())) {
+                    if (TroubleshootUtils.computePath(completePath, trace, outputPath.getOutputPort())) {
                         if (hostsList.isEmpty()) {
-                            trace.addResultMessage("Packet is " + ((EthTypeCriterion) outputPath.getFinalPacket()
+                            trace.addResultMessage("Packet is " + ((EthTypeCriterion) outputPath.getEgressPacket()
                                     .getCriterion(Criterion.Type.ETH_TYPE)).ethType() + " and reached " +
                                     cp + " with no hosts connected ");
                         } else {
@@ -557,7 +547,7 @@ public class TroubleshootManager implements TroubleshootService {
                                 if (hostsList.stream().anyMatch(host -> host.ipAddresses().contains(finalIpAddress)) ||
                                         hostNib.getHostsByIp(finalIpAddress).isEmpty()) {
                                     trace.addResultMessage("Packet is " +
-                                            ((EthTypeCriterion) outputPath.getFinalPacket()
+                                            ((EthTypeCriterion) outputPath.getEgressPacket()
                                                     .getCriterion(Criterion.Type.ETH_TYPE)).ethType() +
                                             " and reached " + cp + " with hosts " + hostsList);
                                 } else {
@@ -566,7 +556,7 @@ public class TroubleshootManager implements TroubleshootService {
                                     trace.setSuccess(false);
                                 }
                             } else {
-                                trace.addResultMessage("Packet is " + ((EthTypeCriterion) outputPath.getFinalPacket()
+                                trace.addResultMessage("Packet is " + ((EthTypeCriterion) outputPath.getEgressPacket()
                                         .getCriterion(Criterion.Type.ETH_TYPE)).ethType() + " and reached " +
                                         cp + " with hosts " + hostsList);
                             }
@@ -576,7 +566,7 @@ public class TroubleshootManager implements TroubleshootService {
                 }
 
             } else {
-                computePath(completePath, trace, cp);
+                TroubleshootUtils.computePath(completePath, trace, cp);
                 trace.setSuccess(false);
                 if (deviceNib.getPort(cp) == null) {
                     //Port is not existent on device.
@@ -592,34 +582,6 @@ public class TroubleshootManager implements TroubleshootService {
         return trace;
     }
 
-
-    /**
-     * If the initial packet comes tagged with a Vlan we output it with that to ONOS.
-     * If ONOS applied a vlan we remove it.
-     *
-     * @param outputPath the output
-     * @param trace      the trace we are building
-     */
-
-    private void handleVlanToController(GroupsInDevice outputPath, StaticPacketTrace trace) {
-
-        VlanIdCriterion initialVid = (VlanIdCriterion) trace.getInitialPacket().getCriterion(Criterion.Type.VLAN_VID);
-        VlanIdCriterion finalVid = (VlanIdCriterion) outputPath.getFinalPacket().getCriterion(Criterion.Type.VLAN_VID);
-
-        if (initialVid != null && !initialVid.equals(finalVid) && initialVid.vlanId().equals(VlanId.NONE)) {
-
-            Set<Criterion> finalCriteria = new HashSet<>(outputPath.getFinalPacket().criteria());
-            //removing the final vlanId
-            finalCriteria.remove(finalVid);
-            Builder packetUpdated = DefaultTrafficSelector.builder();
-            finalCriteria.forEach(packetUpdated::add);
-            //Initial was none so we set it to that
-            packetUpdated.add(Criteria.matchVlanId(VlanId.NONE));
-            //Update final packet
-            outputPath.setFinalPacket(packetUpdated.build());
-        }
-    }
-
     /**
      * Checks if the device has other outputs than the given connect point.
      *
@@ -629,9 +591,8 @@ public class TroubleshootManager implements TroubleshootService {
      * @return true if the device has other outputs.
      */
     private boolean hasOtherOutput(DeviceId inDeviceId, StaticPacketTrace trace, ConnectPoint cp) {
-        return trace.getGroupOuputs(inDeviceId).stream().filter(groupsInDevice -> {
-            return !groupsInDevice.getOutput().equals(cp);
-        }).count() > 0;
+        return trace.getHitChains(inDeviceId).stream().filter(groupsInDevice ->
+                !groupsInDevice.getOutputPort().equals(cp)).count() > 0;
     }
 
     /**
@@ -678,35 +639,6 @@ public class TroubleshootManager implements TroubleshootService {
     }
 
     /**
-     * Computes the list of traversed connect points.
-     *
-     * @param completePath the list of devices
-     * @param trace        the trace we are building
-     * @param output       the final output connect point
-     */
-    private boolean computePath(List<ConnectPoint> completePath, StaticPacketTrace trace, ConnectPoint output) {
-        List<ConnectPoint> traverseList = new ArrayList<>();
-        if (!completePath.contains(trace.getInitialConnectPoint())) {
-            traverseList.add(trace.getInitialConnectPoint());
-        }
-
-        if (output != null && trace.getInitialConnectPoint().deviceId().equals(output.deviceId())) {
-            trace.addCompletePath(ImmutableList.of(trace.getInitialConnectPoint(), output));
-            return true;
-        }
-
-        traverseList.addAll(completePath);
-        if (output != null && !completePath.contains(output)) {
-            traverseList.add(output);
-        }
-        if (!trace.getCompletePaths().contains(traverseList)) {
-            trace.addCompletePath(ImmutableList.copyOf(traverseList));
-            return true;
-        }
-        return false;
-    }
-
-    /**
      * Traces the packet inside a device starting from an input connect point.
      *
      * @param trace        the trace we are building
@@ -718,12 +650,21 @@ public class TroubleshootManager implements TroubleshootService {
      */
     private StaticPacketTrace traceInDevice(StaticPacketTrace trace, TrafficSelector packet, ConnectPoint in,
                                             boolean isDualHomed, List<ConnectPoint> completePath) {
+        // Get the behavior - do not proceed if there is no PipelineMatchable for the given device
+        PipelineTraceable pipelineMatchable = getPipelineMatchable(in.deviceId());
+        if (pipelineMatchable == null) {
+            trace.addResultMessage("No PipelineMatchable behavior for " + in.deviceId() + ". Aborting");
+            TroubleshootUtils.computePath(completePath, trace, null);
+            trace.setSuccess(false);
+            return trace;
+        }
 
+        // Verify the presence of multiple routes - if the device has been visited in the past
         boolean multipleRoutes = false;
-        if (trace.getGroupOuputs(in.deviceId()) != null) {
+        if (trace.getHitChains(in.deviceId()) != null) {
             multipleRoutes = multipleRoutes(trace);
         }
-        if (trace.getGroupOuputs(in.deviceId()) != null && !isDualHomed && !multipleRoutes) {
+        if (trace.getHitChains(in.deviceId()) != null && !isDualHomed && !multipleRoutes) {
             log.debug("Trace already contains device and given outputs");
             return trace;
         }
@@ -733,12 +674,12 @@ public class TroubleshootManager implements TroubleshootService {
         //if device is not available exit here.
         if (!deviceNib.isAvailable(in.deviceId())) {
             trace.addResultMessage("Device is offline " + in.deviceId());
-            computePath(completePath, trace, null);
+            TroubleshootUtils.computePath(completePath, trace, null);
             return trace;
         }
 
-        //handle when the input is the controller
-        //NOTE, we are using the input port as a convenience to carry the CONTROLLER port number even if
+        // Handle when the input is the controller.
+        // NOTE, we are using the input port as a convenience to carry the CONTROLLER port number even if
         // a packet in from the controller will not actually traverse the pipeline and have no such notion
         // as the input port.
         if (in.port().equals(PortNumber.CONTROLLER)) {
@@ -748,197 +689,38 @@ public class TroubleshootManager implements TroubleshootService {
             }
         }
 
-        List<FlowEntry> flows = new ArrayList<>();
-        List<FlowEntry> outputFlows = new ArrayList<>();
-        List<Instruction> deferredInstructions = new ArrayList<>();
-
-        FlowEntry nextTableIdEntry = findNextTableIdEntry(in.deviceId(), -1);
-        if (nextTableIdEntry == null) {
-            trace.addResultMessage("No flow rules for device " + in.deviceId() + ". Aborting");
-            computePath(completePath, trace, null);
+        // Get the device state in the form of DataPlaneEntity objects - do not proceed if there is no state
+        List<DataPlaneEntity> dataPlaneEntities = getDataPlaneEntities(in.deviceId());
+        if (dataPlaneEntities.isEmpty()) {
+            trace.addResultMessage("No device state for " + in.deviceId() + ". Aborting");
+            TroubleshootUtils.computePath(completePath, trace, null);
             trace.setSuccess(false);
             return trace;
         }
-        TableId tableId = nextTableIdEntry.table();
-        FlowEntry flowEntry;
-        boolean output = false;
-        while (!output) {
-            log.debug("Searching a Flow Entry on table {} for packet {}", tableId, packet);
-            //get the rule that matches the incoming packet
-            flowEntry = matchHighestPriority(packet, in, tableId);
-            log.debug("Found Flow Entry {}", flowEntry);
 
-            boolean isOfdpaHardware = TroubleshootUtils.hardwareOfdpaMap
-                    .getOrDefault(driverNib.getDriverName(in.deviceId()), false);
+        // Applies pipeline processing
+        PipelineTraceableInput input = new PipelineTraceableInput(packet, in, dataPlaneEntities);
+        PipelineTraceableOutput output = pipelineMatchable.apply(input);
 
-            //if the flow entry on a table is null and we are on hardware we treat as table miss, with few exceptions
-            if (flowEntry == null && isOfdpaHardware) {
-                log.debug("Ofdpa Hw setup, no flow rule means table miss");
+        // Update the trace
+        List<PipelineTraceableHitChain> hitChains = output.getHitChains();
+        hitChains.forEach(hitChain -> trace.addHitChain(in.deviceId(), hitChain));
+        trace.addResultMessage(output.getLog());
 
-                if (((IndexTableId) tableId).id() == 27) {
-                    //Apparently a miss but Table 27 on OFDPA is a fixed table
-                    packet = handleOfdpa27FixedTable(trace, packet);
-                }
-
-                //Finding next table to go In case of miss
-                nextTableIdEntry = findNextTableIdEntry(in.deviceId(), ((IndexTableId) tableId).id());
-                log.debug("Next table id entry {}", nextTableIdEntry);
-
-                //FIXME find better solution that enable granularity greater than 0 or all rules
-                //(another possibility is max tableId)
-                if (nextTableIdEntry == null && flows.size() == 0) {
-                    trace.addResultMessage("No matching flow rules for device " + in.deviceId() + ". Aborting");
-                    computePath(completePath, trace, null);
-                    trace.setSuccess(false);
-                    return trace;
-
-                } else if (nextTableIdEntry == null) {
-                    //Means that no more flow rules are present
-                    output = true;
-
-                } else if (((IndexTableId) tableId).id() == 20) {
-                    //if the table is 20 OFDPA skips to table 50
-                    log.debug("A miss on Table 20 on OFDPA means that we skip directly to table 50");
-                    tableId = IndexTableId.of(50);
-
-                } else if (((IndexTableId) tableId).id() == 40) {
-                    //if the table is 40 OFDPA skips to table 60
-                    log.debug("A miss on Table 40 on OFDPA means that we skip directly to table 60");
-                    tableId = IndexTableId.of(60);
-                } else {
-                    tableId = nextTableIdEntry.table();
-                }
-
-            } else if (flowEntry == null) {
-                trace.addResultMessage("Packet has no match on table " + tableId + " in device " +
-                        in.deviceId() + ". Dropping");
-                computePath(completePath, trace, null);
-                trace.setSuccess(false);
-                return trace;
-            } else {
-
-                //IF the table has a transition
-                if (flowEntry.treatment().tableTransition() != null) {
-                    //update the next table we transitions to
-                    tableId = IndexTableId.of(flowEntry.treatment().tableTransition().tableId());
-                    log.debug("Flow Entry has transition to table Id {}", tableId);
-                    flows.add(flowEntry);
-                } else {
-                    //table has no transition so it means that it's an output rule if on the last table
-                    log.debug("Flow Entry has no transition to table, treating as last rule {}", flowEntry);
-                    flows.add(flowEntry);
-                    outputFlows.add(flowEntry);
-                    output = true;
-                }
-                //update the packet according to the immediate actions of this flow rule.
-                packet = updatePacket(packet, flowEntry.treatment().immediate()).build();
-
-                //save the deferred rules for later
-                deferredInstructions.addAll(flowEntry.treatment().deferred());
-
-                //If the flow requires to clear deferred actions we do so for all the ones we encountered.
-                if (flowEntry.treatment().clearedDeferred()) {
-                    deferredInstructions.clear();
-                }
-
-                //On table 10 OFDPA needs two rules to apply the vlan if none and then to transition to the next table.
-                if (needsSecondTable10Flow(flowEntry, isOfdpaHardware)) {
-
-                    //Let's get the packet vlanId instruction
-                    VlanIdCriterion packetVlanIdCriterion =
-                            (VlanIdCriterion) packet.getCriterion(Criterion.Type.VLAN_VID);
-
-                    //Let's get the flow entry vlan mod instructions
-                    ModVlanIdInstruction entryModVlanIdInstruction = (ModVlanIdInstruction) flowEntry.treatment()
-                            .immediate().stream()
-                            .filter(instruction -> instruction instanceof ModVlanIdInstruction)
-                            .findFirst().orElse(null);
-
-                    //If the entry modVlan is not null we need to make sure that the packet has been updated and there
-                    // is a flow rule that matches on same criteria and with updated vlanId
-                    if (entryModVlanIdInstruction != null) {
-
-                        FlowEntry secondVlanFlow = getSecondFlowEntryOnTable10(packet, in,
-                                packetVlanIdCriterion, entryModVlanIdInstruction);
-
-                        //We found the flow that we expected
-                        if (secondVlanFlow != null) {
-                            flows.add(secondVlanFlow);
-                        } else {
-                            trace.addResultMessage("Missing forwarding rule for tagged packet on " + in);
-                            computePath(completePath, trace, null);
-                            return trace;
-                        }
-                    }
-
-                }
-
-            }
+        // If there was an error set the success to false
+        if (output.getResult() != PipelineTraceableResult.SUCCESS) {
+            TroubleshootUtils.computePath(completePath, trace, null);
+            trace.setSuccess(false);
         }
 
-        //Creating a modifiable builder for the output packet
-        Builder builder = DefaultTrafficSelector.builder();
-        packet.criteria().forEach(builder::add);
+        log.info("Logs -> {}", output.getLog());
+        hitChains.forEach(hitChain -> log.info("HitChain -> {}", hitChain));
 
-        //Adding all the flows to the trace
-        trace.addFlowsForDevice(in.deviceId(), ImmutableList.copyOf(flows));
-
-        List<PortNumber> outputPorts = new ArrayList<>();
-        List<FlowEntry> outputFlowEntries = handleFlows(trace, packet, in, outputFlows, builder, outputPorts);
-
-
-        log.debug("Handling Groups");
-        //Analyze Groups
-        List<Group> groups = new ArrayList<>();
-
-        Collection<FlowEntry> nonOutputFlows = flows;
-        nonOutputFlows.removeAll(outputFlowEntries);
-
-        //Handling groups pointed at by immediate instructions
-        for (FlowEntry entry : flows) {
-            getGroupsFromInstructions(trace, groups, entry.treatment().immediate(),
-                    entry.deviceId(), builder, outputPorts, in, completePath);
-        }
-
-        //If we have deferred instructions at this point we handle them.
-        if (deferredInstructions.size() > 0) {
-            builder = handleDeferredActions(trace, packet, in, deferredInstructions, outputPorts, groups, completePath);
-
-        }
-        packet = builder.build();
-
-        log.debug("Output Packet {}", packet);
+        // We are done!
         return trace;
     }
 
-    private List<FlowEntry> handleFlows(StaticPacketTrace trace, TrafficSelector packet, ConnectPoint in,
-                                        List<FlowEntry> outputFlows, Builder builder, List<PortNumber> outputPorts) {
-        //TODO optimization
-        //outputFlows contains also last rule of device, so we need filtering for OUTPUT instructions.
-        List<FlowEntry> outputFlowEntries = outputFlows.stream().filter(flow -> flow.treatment()
-                .allInstructions().stream().filter(instruction -> instruction.type()
-                        .equals(Instruction.Type.OUTPUT)).count() > 0).collect(Collectors.toList());
-
-        if (outputFlowEntries.size() > 1) {
-            trace.addResultMessage("More than one flow rule with OUTPUT instruction");
-            log.warn("There cannot be more than one flow entry with OUTPUT instruction for {}", packet);
-        }
-
-        if (outputFlowEntries.size() == 1) {
-
-            OutputInstruction outputInstruction = (OutputInstruction) outputFlowEntries.get(0).treatment()
-                    .allInstructions().stream()
-                    .filter(instruction -> {
-                        return instruction.type().equals(Instruction.Type.OUTPUT);
-                    }).findFirst().get();
-
-            //FIXME using GroupsInDevice for output even if flows.
-            buildOutputFromDevice(trace, in, builder, outputPorts, outputInstruction, ImmutableList.of());
-
-        }
-        return outputFlowEntries;
-    }
-
+    // Compute whether or not there are multiple routes.
     private boolean multipleRoutes(StaticPacketTrace trace) {
         boolean multipleRoutes = false;
         IPCriterion ipCriterion = ((IPCriterion) trace.getInitialPacket().getCriterion(Criterion.Type.IPV4_DST));
@@ -980,424 +762,51 @@ public class TroubleshootManager implements TroubleshootService {
                     .collect(Collectors.toList());
             //build an output from each one
             enabledPorts.forEach(port -> {
-                GroupsInDevice output = new GroupsInDevice(new ConnectPoint(port.element().id(), port.number()),
-                        ImmutableList.of(), trace.getInitialPacket());
-                trace.addGroupOutputPath(in.deviceId(), output);
+                PipelineTraceableHitChain hitChain = new PipelineTraceableHitChain(
+                        new ConnectPoint(port.element().id(), port.number()), ImmutableList.of(),
+                        trace.getInitialPacket());
+                trace.addHitChain(in.deviceId(), hitChain);
             });
             return trace;
         }
         return null;
     }
 
-    private boolean needsSecondTable10Flow(FlowEntry flowEntry, boolean isOfdpaHardware) {
-        return isOfdpaHardware && flowEntry.table().equals(IndexTableId.of(10))
-                && flowEntry.selector().getCriterion(Criterion.Type.VLAN_VID) != null
-                && ((VlanIdCriterion) flowEntry.selector().getCriterion(Criterion.Type.VLAN_VID))
-                .vlanId().equals(VlanId.NONE);
-    }
-
-    /**
-     * Method that finds a flow rule on table 10 that matches the packet and the VLAN of the already
-     * found rule on table 10. This is because OFDPA needs two rules on table 10, first to apply the rule,
-     * second to transition to following table
-     *
-     * @param packet                    the incoming packet
-     * @param in                        the input connect point
-     * @param packetVlanIdCriterion     the vlan criterion from the packet
-     * @param entryModVlanIdInstruction the entry vlan instruction
-     * @return the second flow entry that matched
-     */
-    private FlowEntry getSecondFlowEntryOnTable10(TrafficSelector packet, ConnectPoint in,
-                                                  VlanIdCriterion packetVlanIdCriterion,
-                                                  ModVlanIdInstruction entryModVlanIdInstruction) {
-        FlowEntry secondVlanFlow = null;
-        //Check the packet has been update from the first rule.
-        if (packetVlanIdCriterion.vlanId().equals(entryModVlanIdInstruction.vlanId())) {
-            //find a rule on the same table that matches the vlan and
-            // also all the other elements of the flow such as input port
-            secondVlanFlow = Lists.newArrayList(flowNib.getFlowEntriesByState(in.deviceId(),
-                    FlowEntry.FlowEntryState.ADDED)
-                    .iterator()).stream()
-                    .filter(entry -> {
-                        return entry.table().equals(IndexTableId.of(10));
-                    })
-                    .filter(entry -> {
-                        VlanIdCriterion criterion = (VlanIdCriterion) entry.selector()
-                                .getCriterion(Criterion.Type.VLAN_VID);
-                        return criterion != null && match(packet, entry)
-                                && criterion.vlanId().equals(entryModVlanIdInstruction.vlanId());
-                    }).findFirst().orElse(null);
-
-        }
-        return secondVlanFlow;
-    }
-
-
-    /**
-     * Handles table 27 in Ofpda which is a fixed table not visible to any controller that handles Mpls Labels.
-     *
-     * @param packet the incoming packet
-     * @return the updated packet
-     */
-    private TrafficSelector handleOfdpa27FixedTable(StaticPacketTrace trace, TrafficSelector packet) {
-        log.debug("Handling table 27 on OFDPA, removing mpls ETH Type and change mpls label");
-        Criterion mplsCriterion = packet.getCriterion(Criterion.Type.ETH_TYPE);
-        ImmutableList.Builder<Instruction> builder = ImmutableList.builder();
-
-        //If the pakcet comes in with the expected elements we update it as per OFDPA spec.
-        if (mplsCriterion != null && ((EthTypeCriterion) mplsCriterion).ethType()
-                .equals(EtherType.MPLS_UNICAST.ethType())) {
-            //TODO update with parsing with eth MPLS pop Instruction for treating label an bos
-            Instruction ethInstruction = Instructions.popMpls(((EthTypeCriterion) trace.getInitialPacket()
-                    .getCriterion(Criterion.Type.ETH_TYPE)).ethType());
-            //FIXME what do we use as L3_Unicast mpls Label ?
-            //translateInstruction(builder, ethInstruction);
-            builder.add(ethInstruction);
-        }
-        packet = updatePacket(packet, builder.build()).build();
-        return packet;
-    }
-
-    /**
-     * Finds the flow entry with the minimun next table Id.
-     *
-     * @param deviceId  the device to search
-     * @param currentId the current id. the search will use this as minimum
-     * @return the flow entry with the minimum table Id after the given one.
-     */
-    private FlowEntry findNextTableIdEntry(DeviceId deviceId, int currentId) {
-
-        final Comparator<FlowEntry> comparator = Comparator.comparing((FlowEntry f) -> ((IndexTableId) f.table()).id());
-        return Lists.newArrayList(flowNib.getFlowEntriesByState(deviceId, FlowEntry.FlowEntryState.ADDED)
-                .iterator()).stream()
-                .filter(f -> ((IndexTableId) f.table()).id() > currentId).min(comparator).orElse(null);
-    }
-
-    private Builder handleDeferredActions(StaticPacketTrace trace, TrafficSelector packet,
-                                          ConnectPoint in, List<Instruction> deferredInstructions,
-                                          List<PortNumber> outputPorts, List<Group> groups,
-                                          List<ConnectPoint> completePath) {
-
-        //Update the packet with the deferred instructions
-        Builder builder = updatePacket(packet, deferredInstructions);
-
-        //Gather any output instructions from the deferred instruction
-        List<Instruction> outputFlowInstruction = deferredInstructions.stream().filter(instruction -> {
-            return instruction.type().equals(Instruction.Type.OUTPUT);
-        }).collect(Collectors.toList());
-
-        //We are considering deferred instructions from flows, there can only be one output.
-        if (outputFlowInstruction.size() > 1) {
-            trace.addResultMessage("More than one flow rule with OUTPUT instruction");
-            log.warn("There cannot be more than one flow entry with OUTPUT instruction for {}", packet);
-        }
-        //If there is one output let's go through that
-        if (outputFlowInstruction.size() == 1) {
-            buildOutputFromDevice(trace, in, builder, outputPorts, (OutputInstruction) outputFlowInstruction.get(0),
-                    ImmutableList.of());
-        }
-        //If there is no output let's see if there any deferred instruction point to groups.
-        if (outputFlowInstruction.size() == 0) {
-            getGroupsFromInstructions(trace, groups, deferredInstructions,
-                    in.deviceId(), builder, outputPorts, in, completePath);
-        }
-        return builder;
-    }
-
-    /**
-     * Gets group information from instructions.
-     *
-     * @param trace           the trace we are building
-     * @param groupsForDevice the set of groups for this device
-     * @param instructions    the set of instructions we are searching for groups.
-     * @param deviceId        the device we are considering
-     * @param builder         the builder of the input packet
-     * @param outputPorts     the output ports for that packet
-     */
-    private void getGroupsFromInstructions(StaticPacketTrace trace, List<Group> groupsForDevice,
-                                           List<Instruction> instructions, DeviceId deviceId,
-                                           Builder builder, List<PortNumber> outputPorts,
-                                           ConnectPoint in, List<ConnectPoint> completePath) {
-        List<Instruction> groupInstructionlist = new ArrayList<>();
-        // sort instructions according to priority (larger Instruction.Type ENUM constant first)
-        // which enables to treat other actions before the OUTPUT action
-        //TODO improve the priority scheme according to the OpenFlow ActionSet spec
-        List<Instruction> instructionsSorted = new ArrayList<>();
-        instructionsSorted.addAll(instructions);
-        instructionsSorted.sort((instr1, instr2) -> {
-            return Integer.compare(instr2.type().ordinal(), instr1.type().ordinal());
-        });
-
-        for (Instruction instruction : instructionsSorted) {
-            log.debug("Considering Instruction {}", instruction);
-            //if the instruction is not group we need to update the packet or add the output
-            //to the possible outputs for this packet
-            if (!instruction.type().equals(Instruction.Type.GROUP)) {
-                //if the instruction is not group we need to update the packet or add the output
-                //to the possible outputs for this packet
-                if (instruction.type().equals(Instruction.Type.OUTPUT)) {
-                    buildOutputFromDevice(trace, in, builder, outputPorts,
-                            (OutputInstruction) instruction, ImmutableList.copyOf(groupsForDevice));
-                    //clearing the groups because we start from the top.
-                    groupsForDevice.clear();
-                } else {
-                    builder = translateInstruction(builder, instruction);
-                }
-            } else {
-                //if the instuction is pointing to a group we need to get the group
-                groupInstructionlist.add(instruction);
-            }
-        }
-        //handle all the internal instructions pointing to a group.
-        for (Instruction instr : groupInstructionlist) {
-            GroupInstruction groupInstruction = (GroupInstruction) instr;
-            Group group = Lists.newArrayList(groupNib.getGroups(deviceId)).stream().filter(groupInternal -> {
-                return groupInternal.id().equals(groupInstruction.groupId());
-            }).findAny().orElse(null);
-            if (group == null) {
-                trace.addResultMessage("Null group for Instruction " + instr);
-                trace.setSuccess(false);
-                break;
-            }
-            if (group.buckets().buckets().size() == 0) {
-                trace.addResultMessage("Group " + group.id() + " has no buckets");
-                trace.setSuccess(false);
-                computePath(completePath, trace, null);
-                break;
-            }
-
-            //Cycle in each of the group's buckets and add them to the groups for this Device.
-            for (GroupBucket bucket : group.buckets().buckets()) {
-
-                //add the group to the traversed groups
-                if (!groupsForDevice.contains(group)) {
-                    groupsForDevice.add(group);
-                }
-
-                getGroupsFromInstructions(trace, groupsForDevice, bucket.treatment().allInstructions(),
-                        deviceId, builder, outputPorts, in, completePath);
-            }
-        }
-    }
-
-    /**
-     * Check if the output is the input port, if so adds a dop result message, otherwise builds
-     * a possible output from this device.
-     *
-     * @param trace             the trace
-     * @param in                the input connect point
-     * @param builder           the packet builder
-     * @param outputPorts       the list of output ports for this device
-     * @param outputInstruction the output instruction
-     * @param groupsForDevice   the groups we output from
-     */
-    private void buildOutputFromDevice(StaticPacketTrace trace, ConnectPoint in, Builder builder,
-                                       List<PortNumber> outputPorts, OutputInstruction outputInstruction,
-                                       List<Group> groupsForDevice) {
-        ConnectPoint output = new ConnectPoint(in.deviceId(), outputInstruction.port());
-
-        outputPorts.add(outputInstruction.port());
-
-        GroupsInDevice device = new GroupsInDevice(output, groupsForDevice, builder.build());
-        if (trace.getGroupOuputs(output.deviceId()) != null
-                && trace.getGroupOuputs(output.deviceId()).contains(device)) {
-            return;
-        }
-        trace.addGroupOutputPath(in.deviceId(),
-                new GroupsInDevice(output, groupsForDevice, builder.build()));
-    }
-
-    /**
-     * Applies all give instructions to the input packet.
-     *
-     * @param packet       the input packet
-     * @param instructions the set of instructions
-     * @return the packet with the applied instructions
-     */
-    private Builder updatePacket(TrafficSelector packet, List<Instruction> instructions) {
-        Builder newSelector = DefaultTrafficSelector.builder();
-        packet.criteria().forEach(newSelector::add);
-        //FIXME optimize
-        for (Instruction instruction : instructions) {
-            newSelector = translateInstruction(newSelector, instruction);
-        }
-        return newSelector;
-    }
-
-    /**
-     * Applies an instruction to the packet in the form of a selector.
-     *
-     * @param newSelector the packet selector
-     * @param instruction the instruction to be translated
-     * @return the new selector with the applied instruction
-     */
-    private Builder translateInstruction(Builder newSelector, Instruction instruction) {
-        log.debug("Translating instruction {}", instruction);
-        log.debug("New Selector {}", newSelector.build());
-        //TODO add as required
-        Criterion criterion = null;
-        switch (instruction.type()) {
-            case L2MODIFICATION:
-                L2ModificationInstruction l2Instruction = (L2ModificationInstruction) instruction;
-                switch (l2Instruction.subtype()) {
-                    case VLAN_ID:
-                        ModVlanIdInstruction vlanIdInstruction =
-                                (ModVlanIdInstruction) instruction;
-                        VlanId id = vlanIdInstruction.vlanId();
-                        criterion = Criteria.matchVlanId(id);
-                        break;
-                    case VLAN_POP:
-                        criterion = Criteria.matchVlanId(VlanId.NONE);
-                        break;
-                    case MPLS_PUSH:
-                        ModMplsHeaderInstruction mplsEthInstruction =
-                                (ModMplsHeaderInstruction) instruction;
-                        criterion = Criteria.matchEthType(mplsEthInstruction.ethernetType().toShort());
-                        break;
-                    case MPLS_POP:
-                        ModMplsHeaderInstruction mplsPopInstruction =
-                                (ModMplsHeaderInstruction) instruction;
-                        criterion = Criteria.matchEthType(mplsPopInstruction.ethernetType().toShort());
-
-                        //When popping MPLS we remove label and BOS
-                        TrafficSelector temporaryPacket = newSelector.build();
-                        if (temporaryPacket.getCriterion(Criterion.Type.MPLS_LABEL) != null) {
-                            Builder noMplsSelector = DefaultTrafficSelector.builder();
-                            temporaryPacket.criteria().stream().filter(c -> {
-                                return !c.type().equals(Criterion.Type.MPLS_LABEL) &&
-                                        !c.type().equals(Criterion.Type.MPLS_BOS);
-                            }).forEach(noMplsSelector::add);
-                            newSelector = noMplsSelector;
-                        }
-
-                        break;
-                    case MPLS_LABEL:
-                        ModMplsLabelInstruction mplsLabelInstruction =
-                                (ModMplsLabelInstruction) instruction;
-                        criterion = Criteria.matchMplsLabel(mplsLabelInstruction.label());
-                        newSelector.matchMplsBos(true);
-                        break;
-                    case ETH_DST:
-                        ModEtherInstruction modEtherDstInstruction =
-                                (ModEtherInstruction) instruction;
-                        criterion = Criteria.matchEthDst(modEtherDstInstruction.mac());
-                        break;
-                    case ETH_SRC:
-                        ModEtherInstruction modEtherSrcInstruction =
-                                (ModEtherInstruction) instruction;
-                        criterion = Criteria.matchEthSrc(modEtherSrcInstruction.mac());
-                        break;
-                    default:
-                        log.debug("Unsupported L2 Instruction");
-                        break;
-                }
-                break;
-            default:
-                log.debug("Unsupported Instruction");
-                break;
-        }
-        if (criterion != null) {
-            log.debug("Adding criterion {}", criterion);
-            newSelector.add(criterion);
-        }
-        return newSelector;
-    }
-
-    /**
-     * Finds the rule in the device that mathces the input packet and has the highest priority.
-     *
-     * @param packet  the input packet
-     * @param in      the connect point the packet comes in from
-     * @param tableId the table to search
-     * @return the flow entry
-     */
-    private FlowEntry matchHighestPriority(TrafficSelector packet, ConnectPoint in, TableId tableId) {
-        //Computing the possible match rules.
-        final Comparator<FlowEntry> comparator = Comparator.comparing(FlowRule::priority);
-        return Lists.newArrayList(flowNib.getFlowEntriesByState(in.deviceId(), FlowEntry.FlowEntryState.ADDED)
-                .iterator()).stream()
-                .filter(flowEntry -> {
-                    return flowEntry.table().equals(tableId);
-                })
-                .filter(flowEntry -> {
-                    return match(packet, flowEntry);
-                }).max(comparator).orElse(null);
-    }
-
-    /**
-     * Matches the packet with the given flow entry.
-     *
-     * @param packet    the packet to match
-     * @param flowEntry the flow entry to match the packet against
-     * @return true if the packet matches the flow.
-     */
-    private boolean match(TrafficSelector packet, FlowEntry flowEntry) {
-        return flowEntry.selector().criteria().stream().allMatch(criterion -> {
-            Criterion.Type type = criterion.type();
-            //If the criterion has IP we need to do LPM to establish matching.
-            if (type.equals(Criterion.Type.IPV4_SRC) || type.equals(Criterion.Type.IPV4_DST) ||
-                    type.equals(Criterion.Type.IPV6_SRC) || type.equals(Criterion.Type.IPV6_DST)) {
-                return matchIp(packet, (IPCriterion) criterion);
-                //we check that the packet contains the criterion provided by the flow rule.
-            } else if (type.equals(Criterion.Type.ETH_SRC_MASKED)) {
-                return matchMac(packet, (EthCriterion) criterion, false);
-            } else if (type.equals(Criterion.Type.ETH_DST_MASKED)) {
-                return matchMac(packet, (EthCriterion) criterion, true);
-            } else {
-                return packet.criteria().contains(criterion);
+    ////////////////////////////////
+    // Cemetery - Deprecated code //
+    ////////////////////////////////
+    @Override
+    public List<StaticPacketTrace> pingAll(EtherType type) {
+        ImmutableList.Builder<StaticPacketTrace> tracesBuilder = ImmutableList.builder();
+        hostNib.getHosts().forEach(host -> {
+            List<IpAddress> ipAddresses = getIpAddresses(host, type, false);
+            if (ipAddresses.size() > 0) {
+                //check if the host has only local IPs of that ETH type
+                boolean onlyLocalSrc = ipAddresses.size() == 1 && ipAddresses.get(0).isLinkLocal();
+                hostNib.getHosts().forEach(hostToPing -> {
+                    List<IpAddress> ipAddressesToPing = getIpAddresses(hostToPing, type, false);
+                    //check if the other host has only local IPs of that ETH type
+                    boolean onlyLocalDst = ipAddressesToPing.size() == 1 && ipAddressesToPing.get(0).isLinkLocal();
+                    boolean sameLocation = Sets.intersection(host.locations(), hostToPing.locations()).size() > 0;
+                    //Trace is done only if they are both local and under the same location
+                    // or not local and if they are not the same host.
+                    if (((sameLocation && onlyLocalDst && onlyLocalSrc) ||
+                            (!onlyLocalSrc && !onlyLocalDst && ipAddressesToPing.size() > 0))
+                            && !host.equals(hostToPing)) {
+                        tracesBuilder.addAll(trace(host.id(), hostToPing.id(), type));
+                    }
+                });
             }
         });
+        return tracesBuilder.build();
     }
 
-    /**
-     * Checks if the packet has an dst or src IP and if that IP matches the subnet of the ip criterion.
-     *
-     * @param packet    the incoming packet
-     * @param criterion the criterion to match
-     * @return true if match
-     */
-    private boolean matchIp(TrafficSelector packet, IPCriterion criterion) {
-        IPCriterion matchCriterion = (IPCriterion) packet.getCriterion(criterion.type());
-        //if the packet does not have an IPv4 or IPv6 criterion we return true
-        if (matchCriterion == null) {
-            return false;
-        }
-        try {
-            log.debug("Checking if {} is under {}", matchCriterion.ip(), criterion.ip());
-            Subnet subnet = Subnet.createInstance(criterion.ip().toString());
-            return subnet.isInSubnet(matchCriterion.ip().address().toInetAddress());
-        } catch (UnknownHostException e) {
-            return false;
-        }
+    @Override
+    public List<Set<StaticPacketTrace>> getMulitcastTrace(VlanId vlanId) {
+        Generator<Set<StaticPacketTrace>> gen = new McastGenerator(mcastRouteNib, this, vlanId);
+        List<Set<StaticPacketTrace>> multicastTraceList =
+                StreamSupport.stream(gen.spliterator(), false).collect(Collectors.toList());
+        return multicastTraceList;
     }
 
-    /**
-     * Checks if the packet has a dst or src MAC and if that Mac matches the mask of the mac criterion.
-     *
-     * @param packet       the incoming packet
-     * @param hitCriterion the criterion to match
-     * @param dst          true if we are checking DST MAC
-     * @return true if match
-     */
-    private boolean matchMac(TrafficSelector packet, EthCriterion hitCriterion, boolean dst) {
-        //Packet can have only one EthCriterion
-        EthCriterion matchCriterion;
-        if (dst) {
-            matchCriterion = (EthCriterion) packet.criteria().stream().filter(criterion1 -> {
-                return criterion1.type().equals(Criterion.Type.ETH_DST_MASKED) ||
-                        criterion1.type().equals(Criterion.Type.ETH_DST);
-            }).findFirst().orElse(null);
-        } else {
-            matchCriterion = (EthCriterion) packet.criteria().stream().filter(criterion1 -> {
-                return criterion1.type().equals(Criterion.Type.ETH_SRC_MASKED) ||
-                        criterion1.type().equals(Criterion.Type.ETH_SRC);
-            }).findFirst().orElse(null);
-        }
-        //if the packet does not have an ETH criterion we return true
-        if (matchCriterion == null) {
-            return true;
-        }
-        log.debug("Checking if {} is under {}/{}", matchCriterion.mac(), hitCriterion.mac(), hitCriterion.mask());
-        return compareMac(matchCriterion.mac(), hitCriterion.mac(), hitCriterion.mask());
-    }
 }

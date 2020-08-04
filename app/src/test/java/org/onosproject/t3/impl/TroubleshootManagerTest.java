@@ -17,6 +17,7 @@ package org.onosproject.t3.impl;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
 import org.junit.Before;
 import org.junit.Test;
 import org.onlab.packet.ChassisId;
@@ -25,7 +26,12 @@ import org.onlab.packet.IpAddress;
 import org.onlab.packet.MacAddress;
 import org.onlab.packet.VlanId;
 import org.onosproject.cluster.NodeId;
+import org.onosproject.driver.pipeline.ofdpa.Ofdpa2Pipeline;
+import org.onosproject.driver.traceable.OfdpaPipelineTraceable;
+import org.onosproject.net.AbstractProjectableModel;
+import org.onosproject.net.AnnotationKeys;
 import org.onosproject.net.ConnectPoint;
+import org.onosproject.net.DataPlaneEntity;
 import org.onosproject.net.DefaultAnnotations;
 import org.onosproject.net.DefaultDevice;
 import org.onosproject.net.DefaultLink;
@@ -36,11 +42,19 @@ import org.onosproject.net.Host;
 import org.onosproject.net.Link;
 import org.onosproject.net.Port;
 import org.onosproject.net.PortNumber;
+import org.onosproject.net.SparseAnnotations;
+import org.onosproject.net.behaviour.PipelineTraceable;
+import org.onosproject.net.driver.Behaviour;
+import org.onosproject.net.driver.Driver;
+import org.onosproject.net.driver.DriverAdapter;
+import org.onosproject.net.driver.DriverHandler;
+import org.onosproject.net.driver.DriverService;
+import org.onosproject.net.driver.DriverServiceAdapter;
+import org.onosproject.net.driver.HandlerBehaviour;
 import org.onosproject.net.flow.FlowEntry;
 import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.net.flow.criteria.Criterion;
 import org.onosproject.net.flow.criteria.EthTypeCriterion;
-import org.onosproject.net.flow.criteria.MplsCriterion;
 import org.onosproject.net.flow.criteria.VlanIdCriterion;
 import org.onosproject.net.group.Group;
 import org.onosproject.net.provider.ProviderId;
@@ -57,6 +71,7 @@ import org.onosproject.t3.api.RouteNib;
 import org.onosproject.t3.api.StaticPacketTrace;
 import org.slf4j.Logger;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -75,11 +90,15 @@ import static org.slf4j.LoggerFactory.getLogger;
 public class TroubleshootManagerTest {
 
     private static final Logger log = getLogger(TroubleshootManager.class);
-
     private TroubleshootManager mngr;
+    private Driver baseDriver = new TestDriver();
 
     @Before
     public void setUp() throws Exception {
+        // Setup step for the device
+        DriverService testDeviceService = new TestDriverService();
+        AbstractProjectableModel.setDriverService(null, testDeviceService);
+
         mngr = new TroubleshootManager();
 
         mngr.flowNib = new TestFlowRuleService();
@@ -87,7 +106,7 @@ public class TroubleshootManagerTest {
         mngr.hostNib = new TestHostService();
         mngr.linkNib = new TestLinkService();
         mngr.deviceNib = new TestDeviceService();
-        mngr.driverNib = new TestDriverService();
+        mngr.driverNib = new TestDriverNib();
         mngr.mastershipNib = new TestMastershipService();
         mngr.edgePortNib = new TestEdgePortService();
         mngr.routeNib = new TestRouteService();
@@ -111,6 +130,7 @@ public class TroubleshootManagerTest {
     @Test(expected = NullPointerException.class)
     public void nonExistentDevice() {
         StaticPacketTrace traceFail = mngr.trace(PACKET_OK, ConnectPoint.deviceConnectPoint("nonexistent" + "/1"));
+        log.info("trace {}", traceFail.resultMessage());
     }
 
     /**
@@ -120,7 +140,10 @@ public class TroubleshootManagerTest {
     public void offlineDevice() {
         StaticPacketTrace traceFail = mngr.trace(PACKET_OK, ConnectPoint.deviceConnectPoint(OFFLINE_DEVICE + "/1"));
         assertNotNull("Trace should not be null", traceFail);
-        assertNull("Trace should have 0 output", traceFail.getGroupOuputs(SINGLE_FLOW_DEVICE));
+        assertTrue("Device should be offline",
+                traceFail.resultMessage().contains("Device is offline"));
+        assertNull("Trace should have 0 output", traceFail.getHitChains(SINGLE_FLOW_DEVICE));
+        log.info("trace {}", traceFail.resultMessage());
     }
 
     /**
@@ -146,13 +169,32 @@ public class TroubleshootManagerTest {
                 traceSuccess.resultMessage().contains(PACKET_TO_CONTROLLER));
         assertTrue("Master should be Master1",
                 traceSuccess.resultMessage().contains(MASTER_1));
-        ConnectPoint connectPoint = traceSuccess.getGroupOuputs(ARP_FLOW_DEVICE).get(0).getOutput();
+        ConnectPoint connectPoint = traceSuccess.getHitChains(ARP_FLOW_DEVICE).get(0).getOutputPort();
         assertEquals("Packet Should go to CONTROLLER", PortNumber.CONTROLLER, connectPoint.port());
-        assertNull("VlanId should be null", traceSuccess.getGroupOuputs(ARP_FLOW_DEVICE).get(0)
-                .getFinalPacket().getCriterion(Criterion.Type.VLAN_VID));
+        VlanIdCriterion vlanIdCriterion = (VlanIdCriterion) traceSuccess.getHitChains(ARP_FLOW_DEVICE).get(0)
+                .getEgressPacket().getCriterion(Criterion.Type.VLAN_VID);
+        assertEquals("VlanId should be None", VlanId.NONE, vlanIdCriterion.vlanId());
         log.info("trace {}", traceSuccess.resultMessage());
     }
 
+    /**
+     * Tests ARP to controller and Vlan id removal.
+     */
+    @Test
+    public void arpToControllerVlan() {
+        StaticPacketTrace traceSuccess = mngr.trace(PACKET_ARP, ARP_FLOW_VLAN_CP);
+        assertNotNull("Trace should not be null", traceSuccess);
+        assertTrue("Trace should be successful",
+                traceSuccess.resultMessage().contains(PACKET_TO_CONTROLLER));
+        assertTrue("Master should be Master1",
+                traceSuccess.resultMessage().contains(MASTER_1));
+        ConnectPoint connectPoint = traceSuccess.getHitChains(ARP_FLOW_VLAN_DEVICE).get(0).getOutputPort();
+        assertEquals("Packet Should go to CONTROLLER", PortNumber.CONTROLLER, connectPoint.port());
+        VlanIdCriterion vlanIdCriterion = (VlanIdCriterion) traceSuccess.getHitChains(ARP_FLOW_VLAN_DEVICE).get(0)
+                .getEgressPacket().getCriterion(Criterion.Type.VLAN_VID);
+        assertEquals("VlanId should be None", VlanId.NONE, vlanIdCriterion.vlanId());
+        log.info("trace {}", traceSuccess.resultMessage());
+    }
 
     /**
      * Tests failure on device with no flows.
@@ -161,7 +203,7 @@ public class TroubleshootManagerTest {
     public void noFlows() {
         StaticPacketTrace traceFail = mngr.trace(PACKET_OK, ConnectPoint.deviceConnectPoint("test/1"));
         assertNotNull("Trace should not be null", traceFail);
-        assertNull("Trace should have 0 output", traceFail.getGroupOuputs(SINGLE_FLOW_DEVICE));
+        assertNull("Trace should have 0 output", traceFail.getHitChains(SINGLE_FLOW_DEVICE));
         log.info("trace {}", traceFail.resultMessage());
     }
 
@@ -169,14 +211,12 @@ public class TroubleshootManagerTest {
      * Test group with no buckets.
      */
     @Test
-    public void noBucketsTest() throws Exception {
-
+    public void noBucketsTest() {
         StaticPacketTrace traceFail = mngr.trace(PACKET_OK, NO_BUCKET_CP);
         assertNotNull("Trace should not be null", traceFail);
         assertTrue("Trace should be unsuccessful",
                 traceFail.resultMessage().contains("no buckets"));
         log.info("trace {}", traceFail.resultMessage());
-
     }
 
     /**
@@ -184,10 +224,10 @@ public class TroubleshootManagerTest {
      */
     @Test
     public void testSingleFlowRule() {
-
+        // Happy ending
         testSuccess(PACKET_OK, SINGLE_FLOW_IN_CP, SINGLE_FLOW_DEVICE, SINGLE_FLOW_OUT_CP, 1, 1);
-
-        testFailure(PACKET_FAIL, SINGLE_FLOW_IN_CP, SINGLE_FLOW_DEVICE);
+        // Failure scenario
+        testFailure(PACKET_FAIL, SINGLE_FLOW_IN_CP, SINGLE_FLOW_DEVICE, 1);
     }
 
     /**
@@ -195,159 +235,93 @@ public class TroubleshootManagerTest {
      */
     @Test
     public void testDualFlowRule() {
-
-        //Test Success
-
+        // Test Success
         StaticPacketTrace traceSuccess = testSuccess(PACKET_OK, DUAL_FLOW_IN_CP, DUAL_FLOW_DEVICE,
                 DUAL_FLOW_OUT_CP, 1, 1);
-
-        //Testing Vlan
-        Criterion criterion = traceSuccess.getGroupOuputs(DUAL_FLOW_DEVICE).get(0).
-                getFinalPacket().getCriterion(Criterion.Type.VLAN_VID);
+        // Verifying Vlan
+        Criterion criterion = traceSuccess.getHitChains(DUAL_FLOW_DEVICE).get(0).
+                getEgressPacket().getCriterion(Criterion.Type.VLAN_VID);
         assertNotNull("Packet Should have Vlan", criterion);
-
         VlanIdCriterion vlanIdCriterion = (VlanIdCriterion) criterion;
-
         assertEquals("Vlan should be 100", VlanId.vlanId((short) 100), vlanIdCriterion.vlanId());
 
-        //Test Faliure
-        testFailure(PACKET_FAIL, DUAL_FLOW_IN_CP, DUAL_FLOW_DEVICE);
-
+        // Test Failure
+        testFailure(PACKET_FAIL, DUAL_FLOW_IN_CP, DUAL_FLOW_DEVICE, 1);
     }
 
     /**
      * Test a single flow rule that points to a group with output port in it.
      */
     @Test
-    public void flowAndGroup() throws Exception {
-
+    public void flowAndGroup() {
+        // Test Success
         StaticPacketTrace traceSuccess = testSuccess(PACKET_OK, GROUP_FLOW_IN_CP, GROUP_FLOW_DEVICE,
                 GROUP_FLOW_OUT_CP, 1, 1);
-
-        assertTrue("Wrong Output Group", traceSuccess.getGroupOuputs(GROUP_FLOW_DEVICE)
-                .get(0).getGroups().contains(GROUP));
+        // Verify the output of the test
+        assertTrue("Wrong Output Group", traceSuccess.getHitChains(GROUP_FLOW_DEVICE)
+                .get(0).getHitChain().contains(new DataPlaneEntity(GROUP)));
         assertEquals("Packet should not have MPLS Label", EthType.EtherType.IPV4.ethType(),
-                ((EthTypeCriterion) traceSuccess.getGroupOuputs(GROUP_FLOW_DEVICE)
-                        .get(0).getFinalPacket().getCriterion(Criterion.Type.ETH_TYPE)).ethType());
-        assertNull("Packet should not have MPLS Label", traceSuccess.getGroupOuputs(GROUP_FLOW_DEVICE)
-                .get(0).getFinalPacket().getCriterion(Criterion.Type.MPLS_LABEL));
-        assertNull("Packet should not have MPLS Label", traceSuccess.getGroupOuputs(GROUP_FLOW_DEVICE)
-                .get(0).getFinalPacket().getCriterion(Criterion.Type.MPLS_BOS));
-
-    }
-
-    /**
-     * Test a single flow rule that points to a group with multiple actions
-     * that need to be executed in the order specified in the OpenFlow spec.
-     */
-    @Test
-    public void testGroupMultipleActionsOrdered() {
-
-        StaticPacketTrace traceSuccess = testSuccess(
-                PACKET_OK, ACTION_ORDER_IN_CP, ACTION_ORDER_DEVICE, ACTION_ORDER_OUT_CP, 1, 1);
-
-        assertEquals("Packet should not have VLAN ID",
-                VlanId.NONE,
-                ((VlanIdCriterion) traceSuccess.getGroupOuputs(ACTION_ORDER_DEVICE)
-                        .get(0).getFinalPacket().getCriterion(Criterion.Type.VLAN_VID)).vlanId());
-        assertEquals("Packet should have MPLS label",
-                ACTION_ORDER_MPLS_LABEL,
-                ((MplsCriterion) traceSuccess.getGroupOuputs(ACTION_ORDER_DEVICE)
-                        .get(0).getFinalPacket().getCriterion(Criterion.Type.MPLS_LABEL)).label());
-
+                ((EthTypeCriterion) traceSuccess.getHitChains(GROUP_FLOW_DEVICE)
+                        .get(0).getEgressPacket().getCriterion(Criterion.Type.ETH_TYPE)).ethType());
+        assertNull("Packet should not have MPLS Label", traceSuccess.getHitChains(GROUP_FLOW_DEVICE)
+                .get(0).getEgressPacket().getCriterion(Criterion.Type.MPLS_LABEL));
+        assertNull("Packet should not have MPLS BoS", traceSuccess.getHitChains(GROUP_FLOW_DEVICE)
+                .get(0).getEgressPacket().getCriterion(Criterion.Type.MPLS_BOS));
     }
 
     /**
      * Test path through a 3 device topology.
      */
     @Test
-    public void singlePathTopology() throws Exception {
-
+    public void singlePathTopology() {
+        // Test success
         StaticPacketTrace traceSuccess = testSuccess(PACKET_OK_TOPO, TOPO_FLOW_1_IN_CP,
                 TOPO_FLOW_3_DEVICE, TOPO_FLOW_3_OUT_CP, 1, 1);
-
-        assertTrue("Incorrect path",
-                traceSuccess.getCompletePaths().get(0).contains(TOPO_FLOW_2_IN_CP));
-        assertTrue("Incorrect path",
-                traceSuccess.getCompletePaths().get(0).contains(TOPO_FLOW_2_OUT_CP));
-        assertTrue("Incorrect path",
-                traceSuccess.getCompletePaths().get(0).contains(TOPO_FLOW_3_IN_CP));
-
+        // Verify that the complete path contains all the traversed connect points
+        List<ConnectPoint> path = Lists.newArrayList(TOPO_FLOW_1_IN_CP, TOPO_FLOW_1_OUT_CP,
+                TOPO_FLOW_2_IN_CP, TOPO_FLOW_2_OUT_CP, TOPO_FLOW_3_IN_CP, TOPO_FLOW_3_OUT_CP);
+        assertEquals(path, traceSuccess.getCompletePaths().get(0));
     }
 
     /**
      * Test path through a 4 device topology with first device that has groups with multiple output buckets.
      */
     @Test
-    public void testGroupTopo() throws Exception {
-
+    public void testGroupTopo() {
+        // Test success
         StaticPacketTrace traceSuccess = testSuccess(PACKET_OK_TOPO, TOPO_FLOW_IN_CP,
                 TOPO_FLOW_3_DEVICE, TOPO_FLOW_3_OUT_CP, 2, 1);
-
-        log.info("{}", traceSuccess);
-
+        // Verify the multiple output actions
         assertTrue("Incorrect groups",
-                traceSuccess.getGroupOuputs(TOPO_GROUP_FLOW_DEVICE).get(0).getGroups().contains(TOPO_GROUP));
+                traceSuccess.getHitChains(TOPO_GROUP_FLOW_DEVICE).get(0).getHitChain()
+                        .contains(new DataPlaneEntity(TOPO_GROUP)));
         assertTrue("Incorrect bucket",
-                traceSuccess.getGroupOuputs(TOPO_GROUP_FLOW_DEVICE).get(1).getGroups().contains(TOPO_GROUP));
-    }
-
-    /**
-     * Test HW support in a single device with 2 flow rules to check hit of static HW rules.
-     */
-    @Test
-    public void hardwareTest() throws Exception {
-
-        StaticPacketTrace traceSuccess = testSuccess(PACKET_OK, HARDWARE_DEVICE_IN_CP,
-                HARDWARE_DEVICE, HARDWARE_DEVICE_OUT_CP, 1, 1);
-
-        assertEquals("wrong ETH type", EthType.EtherType.IPV4.ethType(),
-                ((EthTypeCriterion) traceSuccess.getGroupOuputs(HARDWARE_DEVICE).get(0).getFinalPacket()
-                        .getCriterion(Criterion.Type.ETH_TYPE)).ethType());
-
-    }
-
-    /**
-     * Test that HW has two rules on table 10 for untagged packets.
-     */
-    @Test
-    public void hardwareTable10Test() throws Exception {
-
-        StaticPacketTrace traceSuccess = testSuccess(PACKET_OK, HARDWARE_DEVICE_10_IN_CP,
-                HARDWARE_DEVICE_10, HARDWARE_DEVICE_10_OUT_CP, 1, 1);
-
-        assertTrue("Second flow rule is absent", traceSuccess.getFlowsForDevice(HARDWARE_DEVICE_10)
-                .contains(HARDWARE_10_SECOND_FLOW_ENTRY));
-
+                traceSuccess.getHitChains(TOPO_GROUP_FLOW_DEVICE).get(1).getHitChain()
+                        .contains(new DataPlaneEntity(TOPO_GROUP)));
     }
 
     /**
      * Test dual links between 3 topology elements.
      */
     @Test
-    public void dualLinks() throws Exception {
-
+    public void dualLinks() {
+        // Success
         StaticPacketTrace traceSuccess = testSuccess(PACKET_OK, DUAL_LINK_1_CP_1_IN,
                 DUAL_LINK_3, DUAL_LINK_3_CP_3_OUT, 4, 1);
-
-        //TODO tests
-
+        // Verify that the complete path contains all the traversed connect points
+        List<ConnectPoint> path = Lists.newArrayList(DUAL_LINK_1_CP_1_IN, DUAL_LINK_1_CP_2_OUT,
+                DUAL_LINK_2_CP_1_IN, DUAL_LINK_2_CP_2_OUT, DUAL_LINK_3_CP_1_IN, DUAL_LINK_3_CP_3_OUT);
+        assertTrue(traceSuccess.getCompletePaths().contains(path));
+        path = Lists.newArrayList(DUAL_LINK_1_CP_1_IN, DUAL_LINK_1_CP_2_OUT,
+                DUAL_LINK_2_CP_1_IN, DUAL_LINK_2_CP_3_OUT, DUAL_LINK_3_CP_2_IN, DUAL_LINK_3_CP_3_OUT);
+        assertTrue(traceSuccess.getCompletePaths().contains(path));
+        path = Lists.newArrayList(DUAL_LINK_1_CP_1_IN, DUAL_LINK_1_CP_3_OUT,
+                DUAL_LINK_2_CP_4_IN, DUAL_LINK_2_CP_2_OUT, DUAL_LINK_3_CP_1_IN, DUAL_LINK_3_CP_3_OUT);
+        assertTrue(traceSuccess.getCompletePaths().contains(path));
+        path = Lists.newArrayList(DUAL_LINK_1_CP_1_IN, DUAL_LINK_1_CP_3_OUT,
+                DUAL_LINK_2_CP_4_IN, DUAL_LINK_2_CP_3_OUT, DUAL_LINK_3_CP_2_IN, DUAL_LINK_3_CP_3_OUT);
+        assertTrue(traceSuccess.getCompletePaths().contains(path));
     }
-
-    /**
-     * Test proper clear deferred behaviour.
-     */
-    @Test
-    public void clearDeferred() throws Exception {
-
-        StaticPacketTrace traceSuccess = testSuccess(PACKET_OK, DEFERRED_CP_1_IN,
-                DEFERRED_1, DEFERRED_CP_2_OUT, 1, 1);
-
-        assertNull("MPLS should have been not applied due to clear deferred", traceSuccess
-                .getGroupOuputs(DEFERRED_1).get(0).getFinalPacket().getCriterion(Criterion.Type.MPLS_LABEL));
-
-    }
-
 
     /**
      * Test LLDP output to controller.
@@ -360,7 +334,7 @@ public class TroubleshootManagerTest {
                 traceSuccess.resultMessage().contains("Packet goes to the controller"));
         assertTrue("Master should be Master1",
                 traceSuccess.resultMessage().contains(MASTER_1));
-        ConnectPoint connectPoint = traceSuccess.getGroupOuputs(LLDP_FLOW_DEVICE).get(0).getOutput();
+        ConnectPoint connectPoint = traceSuccess.getHitChains(LLDP_FLOW_DEVICE).get(0).getOutputPort();
         assertEquals("Packet Should go to CONTROLLER", PortNumber.CONTROLLER, connectPoint.port());
         log.info("trace {}", traceSuccess.resultMessage());
     }
@@ -369,37 +343,39 @@ public class TroubleshootManagerTest {
      * Test multicast in single device.
      */
     @Test
-    public void multicastTest() throws Exception {
-
+    public void multicastTest() {
+        // Test success
         StaticPacketTrace traceSuccess = mngr.trace(PACKET_OK_MULTICAST, MULTICAST_IN_CP);
-
         log.info("trace {}", traceSuccess);
-
         log.info("trace {}", traceSuccess.resultMessage());
 
+        // Verify some conditions on the test
         assertNotNull("trace should not be null", traceSuccess);
-        assertEquals("Trace should have " + 2 + " output", 2,
-                traceSuccess.getGroupOuputs(MULTICAST_GROUP_FLOW_DEVICE).size());
-        assertEquals("Trace should only have " + 2 + "output", 2,
+        assertEquals("Trace should have " + 2 + " hitchains", 2,
+                traceSuccess.getHitChains(MULTICAST_GROUP_FLOW_DEVICE).size());
+        assertEquals("Trace should only have " + 2 + "paths", 2,
                 traceSuccess.getCompletePaths().size());
         assertTrue("Trace should be successful",
                 traceSuccess.resultMessage().contains("reached output"));
         assertEquals("Incorrect Output CP", MULTICAST_OUT_CP_2,
-                traceSuccess.getGroupOuputs(MULTICAST_GROUP_FLOW_DEVICE).get(0).getOutput());
+                traceSuccess.getHitChains(MULTICAST_GROUP_FLOW_DEVICE).get(0).getOutputPort());
         assertEquals("Incorrect Output CP", MULTICAST_OUT_CP,
-                traceSuccess.getGroupOuputs(MULTICAST_GROUP_FLOW_DEVICE).get(1).getOutput());
-
+                traceSuccess.getHitChains(MULTICAST_GROUP_FLOW_DEVICE).get(1).getOutputPort());
     }
 
     /**
      * Tests dual homing of a host.
      */
     @Test
-    public void dualhomedTest() throws Exception {
+    public void dualhomedTest() {
+        // Test success
         StaticPacketTrace traceSuccess = mngr.trace(PACKET_DUAL_HOME, DUAL_HOME_CP_1_1);
+        log.info("trace {}", traceSuccess);
+        log.info("trace {}", traceSuccess.resultMessage());
 
+        // Verify paths
         assertNotNull("trace should not be null", traceSuccess);
-        assertTrue("Should have 2 output paths", traceSuccess.getCompletePaths().size() == 2);
+        assertEquals("Should have 2 output paths", 2, traceSuccess.getCompletePaths().size());
         assertTrue("Should contain proper path", traceSuccess.getCompletePaths()
                 .contains(ImmutableList.of(DUAL_HOME_CP_1_1, DUAL_HOME_CP_1_2, DUAL_HOME_CP_2_1, DUAL_HOME_CP_2_2)));
         assertTrue("Should contain proper path", traceSuccess.getCompletePaths()
@@ -407,37 +383,36 @@ public class TroubleshootManagerTest {
 
     }
 
-
-    private StaticPacketTrace testSuccess(TrafficSelector packet, ConnectPoint in, DeviceId deviceId, ConnectPoint out,
-                                          int paths, int outputs) {
+    private StaticPacketTrace testSuccess(TrafficSelector packet, ConnectPoint in, DeviceId deviceId,
+                                          ConnectPoint out, int paths, int hitchains) {
         StaticPacketTrace traceSuccess = mngr.trace(packet, in);
-
         log.info("trace {}", traceSuccess);
-
         log.info("trace {}", traceSuccess.resultMessage());
 
         assertNotNull("trace should not be null", traceSuccess);
-        assertEquals("Trace should have " + outputs + " output", outputs,
-                traceSuccess.getGroupOuputs(deviceId).size());
+        assertEquals("Trace should have " + hitchains + " hitchains", hitchains,
+                traceSuccess.getHitChains(deviceId).size());
         assertEquals("Trace should only have " + paths + "output", paths, traceSuccess.getCompletePaths().size());
         assertTrue("Trace should be successful",
                 traceSuccess.resultMessage().contains("Reached required destination Host"));
         assertEquals("Incorrect Output CP", out,
-                traceSuccess.getGroupOuputs(deviceId).get(0).getOutput());
+                traceSuccess.getHitChains(deviceId).get(0).getOutputPort());
 
         return traceSuccess;
     }
 
-    private void testFailure(TrafficSelector packet, ConnectPoint in, DeviceId deviceId) {
+    private void testFailure(TrafficSelector packet, ConnectPoint in, DeviceId deviceId,
+                             int hitchains) {
         StaticPacketTrace traceFail = mngr.trace(packet, in);
-
         log.info("trace {}", traceFail.resultMessage());
 
         assertNotNull("Trace should not be null", traceFail);
-        assertNull("Trace should have 0 output", traceFail.getGroupOuputs(deviceId));
+        assertEquals("Trace should have " + hitchains + " hitchains", hitchains,
+                traceFail.getHitChains(deviceId).size());
     }
 
-    private class TestFlowRuleService extends FlowNib {
+    private static class TestFlowRuleService extends FlowNib {
+
         @Override
         public Iterable<FlowEntry> getFlowEntriesByState(DeviceId deviceId, FlowEntry.FlowEntryState state) {
             if (deviceId.equals(SINGLE_FLOW_DEVICE)) {
@@ -453,23 +428,18 @@ public class TroubleshootManagerTest {
                 return ImmutableList.of(TOPO_SINGLE_FLOW_ENTRY, TOPO_SECOND_INPUT_FLOW_ENTRY);
             } else if (deviceId.equals(TOPO_GROUP_FLOW_DEVICE)) {
                 return ImmutableList.of(TOPO_GROUP_FLOW_ENTRY);
-            } else if (deviceId.equals(HARDWARE_DEVICE)) {
-                return ImmutableList.of(HARDWARE_ETH_FLOW_ENTRY, HARDWARE_FLOW_ENTRY);
             } else if (deviceId.equals(SAME_OUTPUT_FLOW_DEVICE)) {
                 return ImmutableList.of(SAME_OUTPUT_FLOW_ENTRY);
             } else if (deviceId.equals(ARP_FLOW_DEVICE)) {
-                return ImmutableList.of(ARP_FLOW_ENTRY);
+                    return ImmutableList.of(ARP_FLOW_ENTRY);
+            } else if (deviceId.equals(ARP_FLOW_VLAN_DEVICE)) {
+                return ImmutableList.of(ARP_FLOW_VLAN_ENTRY, ARP_FLOW_ENTRY);
             } else if (deviceId.equals(DUAL_LINK_1)) {
                 return ImmutableList.of(DUAL_LINK_1_GROUP_FLOW_ENTRY);
             } else if (deviceId.equals(DUAL_LINK_2)) {
                 return ImmutableList.of(DUAL_LINK_1_GROUP_FLOW_ENTRY, DUAL_LINK_2_GROUP_FLOW_ENTRY);
             } else if (deviceId.equals(DUAL_LINK_3)) {
                 return ImmutableList.of(DUAL_LINK_3_FLOW_ENTRY, DUAL_LINK_3_FLOW_ENTRY_2);
-            } else if (deviceId.equals(DEFERRED_1)) {
-                return ImmutableList.of(DEFERRED_FLOW_ENTRY, DEFERRED_CLEAR_FLOW_ENTRY);
-            } else if (deviceId.equals(HARDWARE_DEVICE_10)) {
-                return ImmutableList.of(HARDWARE_10_FLOW_ENTRY, HARDWARE_10_SECOND_FLOW_ENTRY,
-                        HARDWARE_10_OUTPUT_FLOW_ENTRY);
             } else if (deviceId.equals(LLDP_FLOW_DEVICE)) {
                 return ImmutableList.of(LLDP_FLOW_ENTRY);
             } else if (deviceId.equals(MULTICAST_GROUP_FLOW_DEVICE)) {
@@ -480,16 +450,15 @@ public class TroubleshootManagerTest {
                 return ImmutableList.of(DUAL_HOME_FLOW_ENTRY);
             } else if (deviceId.equals(DUAL_HOME_DEVICE_2) || deviceId.equals(DUAL_HOME_DEVICE_3)) {
                 return ImmutableList.of(DUAL_HOME_OUT_FLOW_ENTRY);
-            } else if (deviceId.equals(ACTION_ORDER_DEVICE)) {
-                return ImmutableList.of(ACTION_ORDER_FLOW_ENTRY);
             }
             return ImmutableList.of();
         }
     }
 
-    private class TestGroupService extends GroupNib {
+    private static class TestGroupService extends GroupNib {
+
         @Override
-        public Iterable<Group> getGroups(DeviceId deviceId) {
+        public Iterable<Group> getGroupsByState(DeviceId deviceId, Group.GroupState groupState) {
             if (deviceId.equals(GROUP_FLOW_DEVICE)) {
                 return ImmutableList.of(GROUP);
             } else if (deviceId.equals(TOPO_GROUP_FLOW_DEVICE)) {
@@ -502,14 +471,12 @@ public class TroubleshootManagerTest {
                 return ImmutableList.of(NO_BUCKET_GROUP);
             } else if (deviceId.equals(DUAL_HOME_DEVICE_1)) {
                 return ImmutableList.of(DUAL_HOME_GROUP);
-            } else if (deviceId.equals(ACTION_ORDER_DEVICE)) {
-                return ImmutableList.of(ACTION_ORDER_GROUP);
             }
             return ImmutableList.of();
         }
     }
 
-    private class TestHostService extends HostNib {
+    private static class TestHostService extends HostNib {
         @Override
         public Set<Host> getConnectedHosts(ConnectPoint connectPoint) {
             if (connectPoint.equals(TOPO_FLOW_3_OUT_CP)) {
@@ -521,11 +488,7 @@ public class TroubleshootManagerTest {
             if (connectPoint.equals(SINGLE_FLOW_OUT_CP) ||
                     connectPoint.equals(DUAL_FLOW_OUT_CP) ||
                     connectPoint.equals(GROUP_FLOW_OUT_CP) ||
-                    connectPoint.equals(HARDWARE_DEVICE_OUT_CP) ||
-                    connectPoint.equals(HARDWARE_DEVICE_10_OUT_CP) ||
-                    connectPoint.equals(DEFERRED_CP_2_OUT) ||
-                    connectPoint.equals(DUAL_LINK_3_CP_3_OUT) ||
-                    connectPoint.equals(ACTION_ORDER_OUT_CP)) {
+                    connectPoint.equals(DUAL_LINK_3_CP_3_OUT)) {
                 return ImmutableSet.of(H1);
             }
             if (connectPoint.equals(DUAL_HOME_CP_2_2) || connectPoint.equals(DUAL_HOME_CP_3_2)) {
@@ -559,7 +522,7 @@ public class TroubleshootManagerTest {
         }
     }
 
-    private class TestLinkService extends LinkNib {
+    private static class TestLinkService extends LinkNib {
         @Override
         public Set<Link> getEgressLinks(ConnectPoint connectPoint) {
             if (connectPoint.equals(TOPO_FLOW_1_OUT_CP)
@@ -638,15 +601,19 @@ public class TroubleshootManagerTest {
         }
     }
 
-    private class TestDeviceService extends DeviceNib {
+    private static class TestDeviceService extends DeviceNib {
         @Override
         public Device getDevice(DeviceId deviceId) {
             if (deviceId.equals(DeviceId.deviceId("nonexistent"))) {
                 return null;
             }
-            return new DefaultDevice(ProviderId.NONE, DeviceId.deviceId("test"), SWITCH,
-                    "test", "test", "test", "test", new ChassisId(),
-                    DefaultAnnotations.builder().set("foo", "bar").build());
+            SparseAnnotations annotations = DefaultAnnotations.builder()
+                    .set("foo", "bar")
+                    .set(AnnotationKeys.DRIVER, OFDPA_DRIVER)
+                    .build();
+            return new DefaultDevice(ProviderId.NONE, deviceId, SWITCH,
+                    MANUFACTURER, HW_VERSION, SW_VERSION, SERIAL_NUMBER, new ChassisId(),
+                    annotations);
         }
 
         @Override
@@ -660,24 +627,21 @@ public class TroubleshootManagerTest {
         }
     }
 
-    private class TestDriverService extends DriverNib {
+    private static class TestDriverNib extends DriverNib {
         @Override
         public String getDriverName(DeviceId deviceId) {
-            if (deviceId.equals(HARDWARE_DEVICE) || deviceId.equals(HARDWARE_DEVICE_10)) {
-                return "ofdpa";
-            }
             return "NotHWDriver";
         }
     }
 
-    private class TestMastershipService extends MastershipNib {
+    private static class TestMastershipService extends MastershipNib {
         @Override
         public NodeId getMasterFor(DeviceId deviceId) {
             return NodeId.nodeId(MASTER_1);
         }
     }
 
-    private class TestEdgePortService extends EdgePortNib {
+    private static class TestEdgePortService extends EdgePortNib {
         @Override
         public boolean isEdgePoint(ConnectPoint point) {
             return point.equals(MULTICAST_OUT_CP) ||
@@ -685,11 +649,58 @@ public class TroubleshootManagerTest {
         }
     }
 
-    private class TestRouteService extends RouteNib {
+    private static class TestRouteService extends RouteNib {
         @Override
         public Optional<ResolvedRoute> longestPrefixLookup(IpAddress ip) {
             return Optional.empty();
         }
+    }
+
+    private class TestDriverService extends DriverServiceAdapter {
+        @Override
+        public Driver getDriver(DeviceId deviceId) {
+            return baseDriver;
+        }
+    }
+
+    private static class TestDriver extends DriverAdapter {
+
+        @Override
+        public String manufacturer() {
+            return MANUFACTURER;
+        }
+
+        @Override
+        public String hwVersion() {
+            return HW_VERSION;
+        }
+
+        @Override
+        public String swVersion() {
+            return SW_VERSION;
+        }
+
+        @Override
+        public String name() {
+            return OFDPA_DRIVER;
+        }
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public <T extends Behaviour> T createBehaviour(DriverHandler handler, Class<T> behaviourClass) {
+            if (behaviourClass == PipelineTraceable.class) {
+                T behaviour = (T) new OfdpaPipelineTraceable();
+                behaviour.setData(handler.data());
+                ((HandlerBehaviour) behaviour).setHandler(handler);
+                return behaviour;
+            } else {
+                T behaviour = (T) new Ofdpa2Pipeline();
+                behaviour.setData(handler.data());
+                ((HandlerBehaviour) behaviour).setHandler(handler);
+                return behaviour;
+            }
+        }
+
     }
 
 }

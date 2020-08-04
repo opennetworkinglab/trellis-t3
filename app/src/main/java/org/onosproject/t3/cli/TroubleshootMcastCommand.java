@@ -24,6 +24,7 @@ import org.apache.karaf.shell.api.action.lifecycle.Service;
 import org.onlab.packet.EthType;
 import org.onlab.packet.IpPrefix;
 import org.onlab.packet.VlanId;
+import org.onlab.util.Generator;
 import org.onosproject.cli.AbstractShellCommand;
 import org.onosproject.cli.PlaceholderCompleter;
 import org.onosproject.net.ConnectPoint;
@@ -33,7 +34,6 @@ import org.onosproject.net.flow.criteria.EthTypeCriterion;
 import org.onosproject.net.flow.criteria.IPCriterion;
 import org.onosproject.t3.api.StaticPacketTrace;
 import org.onosproject.t3.api.TroubleshootService;
-import org.onosproject.t3.impl.Generator;
 
 import java.util.ArrayList;
 import java.util.List;

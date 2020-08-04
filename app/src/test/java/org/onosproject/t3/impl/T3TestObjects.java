@@ -113,6 +113,10 @@ final class T3TestObjects {
     //ARP
     static final DeviceId ARP_FLOW_DEVICE = DeviceId.deviceId("ArpDevice");
 
+    private static final TrafficSelector PORT_SELECTOR = DefaultTrafficSelector.builder()
+            .matchInPort(PortNumber.portNumber(1))
+            .build();
+
     private static final TrafficSelector ARP_FLOW_SELECTOR = DefaultTrafficSelector.builder()
             .matchInPort(PortNumber.portNumber(1))
             .matchEthType(EthType.EtherType.ARP.ethType().toShort())
@@ -121,7 +125,7 @@ final class T3TestObjects {
     private static final TrafficTreatment ARP_FLOW_TREATMENT = DefaultTrafficTreatment.builder()
             .setOutput(PortNumber.CONTROLLER).build();
     private static final FlowRule ARP_FLOW = DefaultFlowEntry.builder().forDevice(ARP_FLOW_DEVICE)
-            .forTable(0)
+            .forTable(10)
             .withPriority(100)
             .withSelector(ARP_FLOW_SELECTOR)
             .withTreatment(ARP_FLOW_TREATMENT)
@@ -132,13 +136,28 @@ final class T3TestObjects {
 
     static final ConnectPoint ARP_FLOW_CP = ConnectPoint.deviceConnectPoint(ARP_FLOW_DEVICE + "/" + 1);
 
+    // ARP Vlan test
+    static final DeviceId ARP_FLOW_VLAN_DEVICE = DeviceId.deviceId("ArpDeviceVlan");
 
-    //Dual Flow Test
-    static final DeviceId DUAL_FLOW_DEVICE = DeviceId.deviceId("DualFlowDevice");
     private static final TrafficTreatment TRANSITION_FLOW_TREATMENT = DefaultTrafficTreatment.builder()
             .setVlanId(VlanId.vlanId((short) 100))
             .transition(10)
             .build();
+    private static final FlowRule ARP_FLOW_VLAN = DefaultFlowEntry.builder().forDevice(ARP_FLOW_VLAN_DEVICE)
+            .forTable(0)
+            .withPriority(100)
+            .withSelector(PORT_SELECTOR)
+            .withTreatment(TRANSITION_FLOW_TREATMENT)
+            .fromApp(new DefaultApplicationId(0, "TestApp"))
+            .makePermanent()
+            .build();
+    static final FlowEntry ARP_FLOW_VLAN_ENTRY = new DefaultFlowEntry(ARP_FLOW_VLAN);
+
+    static final ConnectPoint ARP_FLOW_VLAN_CP = ConnectPoint.deviceConnectPoint(ARP_FLOW_VLAN_DEVICE + "/" + 1);
+
+    //Dual Flow Test
+    static final DeviceId DUAL_FLOW_DEVICE = DeviceId.deviceId("DualFlowDevice");
+
     private static final TrafficSelector VLAN_FLOW_SELECTOR = DefaultTrafficSelector.builder()
             .matchVlanId(VlanId.vlanId((short) 100))
             .build();
@@ -198,39 +217,6 @@ final class T3TestObjects {
     static final ConnectPoint GROUP_FLOW_IN_CP = ConnectPoint.deviceConnectPoint(GROUP_FLOW_DEVICE + "/" + 1);
 
     static final ConnectPoint GROUP_FLOW_OUT_CP = ConnectPoint.deviceConnectPoint(GROUP_FLOW_DEVICE + "/" + 2);
-
-    // Group multiple action order test
-    static final DeviceId ACTION_ORDER_DEVICE = DeviceId.deviceId("ActionOrderDevice");
-    private static final VlanId ACTION_ORDER_VLAN_ID = VlanId.vlanId("999");
-    static final MplsLabel ACTION_ORDER_MPLS_LABEL = MplsLabel.mplsLabel("999");
-    private static final TrafficTreatment ACTION_ORDER_FLOW_TREATMENT = DefaultTrafficTreatment.builder()
-            .pushVlan()
-            .setVlanId(ACTION_ORDER_VLAN_ID)
-            .group(GROUP_ID)
-            .build();
-    private static final FlowRule ACTION_ORDER_FLOW = DefaultFlowEntry.builder().forDevice(ACTION_ORDER_DEVICE)
-            .forTable(0)
-            .withPriority(100)
-            .withSelector(SINGLE_FLOW_SELECTOR)
-            .withTreatment(ACTION_ORDER_FLOW_TREATMENT)
-            .fromApp(new DefaultApplicationId(0, "TestApp"))
-            .makePermanent()
-            .build();
-    static final FlowEntry ACTION_ORDER_FLOW_ENTRY = new DefaultFlowEntry(ACTION_ORDER_FLOW);
-    private static final TrafficTreatment ACTION_ORDER_GROUP_TREATMENT = DefaultTrafficTreatment.builder()
-            // make lower order actions come first
-            .setOutput(PortNumber.portNumber(2))
-            .setMpls(ACTION_ORDER_MPLS_LABEL)
-            .pushMpls()
-            .popVlan()
-            .build();
-    private static final GroupBucket ACTION_ORDER_BUCKET = DefaultGroupBucket
-            .createSelectGroupBucket(ACTION_ORDER_GROUP_TREATMENT);
-    private static final GroupBuckets ACTION_ORDER_BUCKETS = new GroupBuckets(ImmutableList.of(ACTION_ORDER_BUCKET));
-    static final Group ACTION_ORDER_GROUP = new DefaultGroup(
-            GROUP_ID, ACTION_ORDER_DEVICE, Group.Type.SELECT, ACTION_ORDER_BUCKETS);
-    static final ConnectPoint ACTION_ORDER_IN_CP = ConnectPoint.deviceConnectPoint(ACTION_ORDER_DEVICE + "/" + 1);
-    static final ConnectPoint ACTION_ORDER_OUT_CP = ConnectPoint.deviceConnectPoint(ACTION_ORDER_DEVICE + "/" + 2);
 
     //topology
 
@@ -332,116 +318,6 @@ final class T3TestObjects {
 
     static final ConnectPoint TOPO_FLOW_4_OUT_CP = ConnectPoint.deviceConnectPoint(TOPO_FLOW_4_DEVICE + "/" + 2);
 
-
-    //hardware
-
-    static final DeviceId HARDWARE_DEVICE = DeviceId.deviceId("HardwareDevice");
-
-    static final ConnectPoint HARDWARE_DEVICE_IN_CP = ConnectPoint.deviceConnectPoint(HARDWARE_DEVICE + "/" + 1);
-
-    static final ConnectPoint HARDWARE_DEVICE_OUT_CP = ConnectPoint.deviceConnectPoint(HARDWARE_DEVICE + "/" + 2);
-
-    private static final TrafficSelector HARDWARE_FLOW_SELECTOR = DefaultTrafficSelector.builder()
-            .matchInPort(PortNumber.portNumber(1))
-            .matchIPSrc(IpPrefix.valueOf("127.0.0.1/32"))
-            .matchIPDst(IpPrefix.valueOf("127.0.0.2/32"))
-            .build();
-
-    private static final TrafficTreatment HW_TRANSITION_FLOW_TREATMENT = DefaultTrafficTreatment.builder()
-            .pushMpls()
-            .transition(27)
-            .build();
-
-    private static final FlowRule HARDWARE_FLOW = DefaultFlowEntry.builder().forDevice(TOPO_FLOW_3_DEVICE)
-            .forTable(0)
-            .withPriority(100)
-            .withSelector(HARDWARE_FLOW_SELECTOR)
-            .withTreatment(HW_TRANSITION_FLOW_TREATMENT)
-            .fromApp(new DefaultApplicationId(0, "TestApp"))
-            .makePermanent()
-            .build();
-
-    static final FlowEntry HARDWARE_FLOW_ENTRY = new DefaultFlowEntry(HARDWARE_FLOW);
-
-    private static final TrafficSelector HARDWARE_ETH_FLOW_SELECTOR = DefaultTrafficSelector.builder()
-            .matchInPort(PortNumber.portNumber(1))
-            .matchIPSrc(IpPrefix.valueOf("127.0.0.1/32"))
-            .matchIPDst(IpPrefix.valueOf("127.0.0.2/32"))
-            .matchEthType(EthType.EtherType.IPV4.ethType().toShort())
-            .build();
-
-    private static final FlowRule HARDWARE_ETH_FLOW = DefaultFlowEntry.builder().forDevice(TOPO_FLOW_3_DEVICE)
-            .forTable(30)
-            .withPriority(100)
-            .withSelector(HARDWARE_ETH_FLOW_SELECTOR)
-            .withTreatment(OUTPUT_FLOW_TREATMENT)
-            .fromApp(new DefaultApplicationId(0, "TestApp"))
-            .makePermanent()
-            .build();
-
-    static final FlowEntry HARDWARE_ETH_FLOW_ENTRY = new DefaultFlowEntry(HARDWARE_ETH_FLOW);
-
-    //HW Double Rule on 10
-
-    static final DeviceId HARDWARE_DEVICE_10 = DeviceId.deviceId("HardwareDevice10");
-
-    static final ConnectPoint HARDWARE_DEVICE_10_IN_CP = ConnectPoint.deviceConnectPoint(HARDWARE_DEVICE_10 + "/" + 1);
-
-    static final ConnectPoint HARDWARE_DEVICE_10_OUT_CP = ConnectPoint.deviceConnectPoint(HARDWARE_DEVICE_10 + "/" + 2);
-
-    private static final TrafficSelector HARDWARE_10_FLOW_SELECTOR = DefaultTrafficSelector.builder()
-            .matchInPort(PortNumber.portNumber(1))
-            .matchIPSrc(IpPrefix.valueOf("127.0.0.1/32"))
-            .matchIPDst(IpPrefix.valueOf("127.0.0.2/32"))
-            .matchVlanId(VlanId.NONE)
-            .build();
-
-    private static final TrafficTreatment HARDWARE_10_TRANSITION_FLOW_TREATMENT = DefaultTrafficTreatment.builder()
-            .setVlanId(VlanId.vlanId("10"))
-            .transition(20)
-            .build();
-
-    private static final FlowRule HARDWARE_DEVICE_10_FLOW = DefaultFlowEntry.builder().forDevice(HARDWARE_DEVICE_10)
-            .forTable(10)
-            .withPriority(100)
-            .withSelector(HARDWARE_10_FLOW_SELECTOR)
-            .withTreatment(HARDWARE_10_TRANSITION_FLOW_TREATMENT)
-            .fromApp(new DefaultApplicationId(0, "TestApp"))
-            .makePermanent()
-            .build();
-
-    static final FlowEntry HARDWARE_10_FLOW_ENTRY = new DefaultFlowEntry(HARDWARE_DEVICE_10_FLOW);
-
-    private static final TrafficSelector HARDWARE_10_SECOND_SELECTOR = DefaultTrafficSelector.builder()
-            .matchInPort(PortNumber.portNumber(1))
-            .matchVlanId(VlanId.vlanId("10"))
-            .matchIPSrc(IpPrefix.valueOf("127.0.0.1/32"))
-            .matchIPDst(IpPrefix.valueOf("127.0.0.2/32"))
-            .matchEthType(EthType.EtherType.IPV4.ethType().toShort())
-            .build();
-
-    private static final FlowRule HARDWARE_10_SECOND_FLOW = DefaultFlowEntry.builder().forDevice(HARDWARE_DEVICE_10)
-            .forTable(10)
-            .withPriority(100)
-            .withSelector(HARDWARE_10_SECOND_SELECTOR)
-            .withTreatment(HARDWARE_10_TRANSITION_FLOW_TREATMENT)
-            .fromApp(new DefaultApplicationId(0, "TestApp"))
-            .makePermanent()
-            .build();
-
-    static final FlowEntry HARDWARE_10_SECOND_FLOW_ENTRY = new DefaultFlowEntry(HARDWARE_10_SECOND_FLOW);
-
-    private static final FlowRule HARDWARE_10_OUTPUT_FLOW = DefaultFlowEntry.builder().forDevice(HARDWARE_DEVICE_10)
-            .forTable(20)
-            .withPriority(100)
-            .withSelector(SINGLE_FLOW_SELECTOR)
-            .withTreatment(OUTPUT_FLOW_TREATMENT)
-            .fromApp(new DefaultApplicationId(0, "TestApp"))
-            .makePermanent()
-            .build();
-
-    static final FlowEntry HARDWARE_10_OUTPUT_FLOW_ENTRY = new DefaultFlowEntry(HARDWARE_10_OUTPUT_FLOW);
-
     //Dual Links
     // - (1) Device 1 (2-3) - (1-4) Device 2 (2-3) - (1-2) Device 3 (3) -
     static final DeviceId DUAL_LINK_1 = DeviceId.deviceId("DualLink1");
@@ -538,29 +414,6 @@ final class T3TestObjects {
 
     static final Group DUAL_LINK_GROUP = new DefaultGroup(GROUP_ID, DUAL_LINK_1, Group.Type.SELECT, BUCKETS_DUAL);
 
-    //Clear Deferred
-    static final DeviceId DEFERRED_1 = DeviceId.deviceId("Deferred");
-
-    static final ConnectPoint DEFERRED_CP_1_IN = ConnectPoint.deviceConnectPoint(DEFERRED_1 + "/" + 1);
-    static final ConnectPoint DEFERRED_CP_2_OUT = ConnectPoint.deviceConnectPoint(DEFERRED_1 + "/" + 2);
-
-    //match on port 1 and apply deferred actions
-    private static final TrafficTreatment DEFERRED_1_FLOW_TREATMENT = DefaultTrafficTreatment.builder()
-            .transition(10)
-            .deferred()
-            .pushMpls()
-            .setMpls(MplsLabel.mplsLabel(100))
-            .build();
-    private static final FlowRule DEFERRED_FLOW = DefaultFlowEntry.builder().forDevice(DEFERRED_1)
-            .forTable(0)
-            .withPriority(100)
-            .withSelector(SINGLE_FLOW_SELECTOR)
-            .withTreatment(DEFERRED_1_FLOW_TREATMENT)
-            .fromApp(new DefaultApplicationId(0, "TestApp"))
-            .makePermanent()
-            .build();
-    static final FlowEntry DEFERRED_FLOW_ENTRY = new DefaultFlowEntry(DEFERRED_FLOW);
-
     //Multicast Flow and Group Test
     static final DeviceId MULTICAST_GROUP_FLOW_DEVICE = DeviceId.deviceId("MulticastGroupFlowDevice");
 
@@ -591,21 +444,6 @@ final class T3TestObjects {
 
     static final ConnectPoint MULTICAST_OUT_CP_2 =
             ConnectPoint.deviceConnectPoint(MULTICAST_GROUP_FLOW_DEVICE + "/" + 2);
-
-    //match on port 1, clear deferred actions and output
-    private static final TrafficTreatment DEFERRED_CLEAR_1_FLOW_TREATMENT = DefaultTrafficTreatment.builder()
-            .wipeDeferred()
-            .setOutput(PortNumber.portNumber(2))
-            .build();
-    private static final FlowRule DEFERRED_CLEAR_FLOW = DefaultFlowEntry.builder().forDevice(DEFERRED_1)
-            .forTable(10)
-            .withPriority(100)
-            .withSelector(SINGLE_FLOW_SELECTOR)
-            .withTreatment(DEFERRED_CLEAR_1_FLOW_TREATMENT)
-            .fromApp(new DefaultApplicationId(0, "TestApp"))
-            .makePermanent()
-            .build();
-    static final FlowEntry DEFERRED_CLEAR_FLOW_ENTRY = new DefaultFlowEntry(DEFERRED_CLEAR_FLOW);
 
     //LLDP
 
@@ -752,6 +590,7 @@ final class T3TestObjects {
             .matchIPSrc(IpPrefix.valueOf("127.0.0.1/32"))
             .matchIPDst(IpPrefix.valueOf("127.0.0.2/32"))
             .matchVlanId(VlanId.NONE)
+            .matchMetadata(EthType.EtherType.IPV4.ethType().toShort())
             .build();
 
     static final TrafficSelector PACKET_OK_TOPO = DefaultTrafficSelector.builder()
@@ -764,6 +603,7 @@ final class T3TestObjects {
             .matchInPort(PortNumber.portNumber(1))
             .matchIPDst(IpPrefix.valueOf("255.255.255.255/32"))
             .matchEthType(EthType.EtherType.ARP.ethType().toShort())
+            .matchVlanId(VlanId.NONE)
             .build();
 
     static final TrafficSelector PACKET_LLDP = DefaultTrafficSelector.builder()
@@ -790,4 +630,11 @@ final class T3TestObjects {
             .matchIPSrc(IpPrefix.valueOf("127.0.0.1/32"))
             .matchIPDst(IpPrefix.valueOf("127.0.0.99/32"))
             .build();
+
+    static final String OFDPA_DRIVER = "ofdpa";
+    static final String MANUFACTURER = "test";
+    static final String HW_VERSION = "test";
+    static final String SW_VERSION = "test";
+    static final String SERIAL_NUMBER = "test";
+
 }

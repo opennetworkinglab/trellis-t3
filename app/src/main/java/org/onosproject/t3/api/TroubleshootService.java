@@ -18,10 +18,10 @@ package org.onosproject.t3.api;
 
 import org.onlab.packet.EthType;
 import org.onlab.packet.VlanId;
+import org.onlab.util.Generator;
 import org.onosproject.net.ConnectPoint;
 import org.onosproject.net.HostId;
 import org.onosproject.net.flow.TrafficSelector;
-import org.onosproject.t3.impl.Generator;
 
 import java.util.List;
 import java.util.Set;
@@ -37,7 +37,9 @@ public interface TroubleshootService {
      *
      * @param type the etherType of the traffic we want to trace.
      * @return trace result
+     * @deprecated in t3-4.0
      */
+    @Deprecated
     List<StaticPacketTrace> pingAll(EthType.EtherType type);
 
     /**
@@ -81,7 +83,9 @@ public interface TroubleshootService {
      *
      * @param vlanId the vlan id configured for multicast
      * @return list of trace result
+     * @deprecated in t3-4.0
      */
+    @Deprecated
     List<Set<StaticPacketTrace>> getMulitcastTrace(VlanId vlanId);
 
     /**

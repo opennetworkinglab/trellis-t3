@@ -16,10 +16,12 @@
 
 package org.onosproject.t3.impl;
 
-import com.google.common.collect.ImmutableMap;
-import org.onlab.packet.MacAddress;
+import com.google.common.collect.ImmutableList;
+import org.onosproject.net.ConnectPoint;
+import org.onosproject.t3.api.StaticPacketTrace;
 
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Utility class for the troubleshooting tool.
@@ -31,50 +33,33 @@ final class TroubleshootUtils {
     }
 
     /**
-     * Map defining if a specific driver is for a HW switch.
+     * Computes the list of traversed connect points.
+     *
+     * @param completePath the list of devices
+     * @param trace        the trace we are building
+     * @param output       the final output connect point
+     * @return true only if the path is successfully computed and added to the trace
      */
-    //Done with builder() instead of of() for clarity
-    static Map<String, Boolean> hardwareOfdpaMap = ImmutableMap.<String, Boolean>builder()
-            .put("ofdpa", true)
-            .put("ofdpa3", true)
-            .put("qmx-ofdpa3", true)
-            .put("as7712-32x-premium", true)
-            .put("as5912-54x-premium", true)
-            .put("as5916-54x-premium", true)
-            .put("accton-ofdpa3", true)
-            .put("delta-ofdpa3", true)
-            .put("znyx-ofdpa", true)
-            .build();
-
-    /**
-     * Checks if the Mac Address is inside a range between the min MAC and the mask.
-     * @param macAddress the MAC address to check
-     * @param minAddr the min MAC address
-     * @param maskAddr the mask
-     * @return true if in range, false otherwise.
-     */
-    static boolean compareMac(MacAddress macAddress, MacAddress minAddr, MacAddress maskAddr) {
-        byte[] mac = macAddress.toBytes();
-        byte[] min = minAddr.toBytes();
-        byte[] mask = maskAddr.toBytes();
-        boolean inRange = true;
-
-        int i = 0;
-
-        //if mask is 00 stop
-        while (inRange && i < mask.length && (mask[i] & 0xFF) != 0) {
-            int ibmac = mac[i] & 0xFF;
-            int ibmin = min[i] & 0xFF;
-            int ibmask = mask[i] & 0xFF;
-            if (ibmask == 255) {
-                inRange = ibmac == ibmin;
-            } else if (ibmac < ibmin || ibmac >= ibmask) {
-                inRange = false;
-                break;
-            }
-            i++;
+    static boolean computePath(List<ConnectPoint> completePath, StaticPacketTrace trace, ConnectPoint output) {
+        List<ConnectPoint> traverseList = new ArrayList<>();
+        if (!completePath.contains(trace.getInitialConnectPoint())) {
+            traverseList.add(trace.getInitialConnectPoint());
         }
 
-        return inRange;
+        if (output != null && trace.getInitialConnectPoint().deviceId().equals(output.deviceId())) {
+            trace.addCompletePath(ImmutableList.of(trace.getInitialConnectPoint(), output));
+            return true;
+        }
+
+        traverseList.addAll(completePath);
+        if (output != null && !completePath.contains(output)) {
+            traverseList.add(output);
+        }
+        if (!trace.getCompletePaths().contains(traverseList)) {
+            trace.addCompletePath(ImmutableList.copyOf(traverseList));
+            return true;
+        }
+        return false;
     }
+
 }

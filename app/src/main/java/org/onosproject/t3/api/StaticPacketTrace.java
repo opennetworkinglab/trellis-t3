@@ -21,6 +21,7 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.onosproject.net.ConnectPoint;
 import org.onosproject.net.DeviceId;
 import org.onosproject.net.Host;
+import org.onosproject.net.PipelineTraceableHitChain;
 import org.onosproject.net.flow.FlowEntry;
 import org.onosproject.net.flow.TrafficSelector;
 
@@ -36,10 +37,11 @@ import java.util.Optional;
  */
 public class StaticPacketTrace {
 
-    private final TrafficSelector inPacket;
-    private final ConnectPoint in;
+    private final TrafficSelector ingressPacket;
+    private final ConnectPoint ingressPoint;
     List<List<ConnectPoint>> completePaths;
     private Map<DeviceId, List<GroupsInDevice>> outputsForDevice;
+    private Map<DeviceId, List<PipelineTraceableHitChain>> hitChainsForDevice;
     private Map<DeviceId, List<FlowEntry>> flowsForDevice;
     private StringBuilder resultMessage;
     private Pair<Host, Host> hosts;
@@ -48,15 +50,16 @@ public class StaticPacketTrace {
     /**
      * Builds the trace with a given packet and a connect point.
      *
-     * @param packet the packet to trace
-     * @param in     the initial connect point
+     * @param inPacket the packet to trace
+     * @param inPoint  the initial connect point
      */
-    public StaticPacketTrace(TrafficSelector packet, ConnectPoint in) {
-        this.inPacket = packet;
-        this.in = in;
+    public StaticPacketTrace(TrafficSelector inPacket, ConnectPoint inPoint) {
+        this.ingressPacket = inPacket;
+        this.ingressPoint = inPoint;
         completePaths = new ArrayList<>();
         outputsForDevice = new HashMap<>();
         flowsForDevice = new HashMap<>();
+        hitChainsForDevice = new HashMap<>();
         resultMessage = new StringBuilder();
         hosts = null;
     }
@@ -64,16 +67,17 @@ public class StaticPacketTrace {
     /**
      * Builds the trace with a given packet and a connect point.
      *
-     * @param packet the packet to trace
-     * @param in     the initial connect point
-     * @param hosts  pair of source and destination hosts
+     * @param inPacket the packet to trace
+     * @param inPoint  the initial connect point
+     * @param hosts    pair of source and destination hosts
      */
-    public StaticPacketTrace(TrafficSelector packet, ConnectPoint in, Pair<Host, Host> hosts) {
-        this.inPacket = packet;
-        this.in = in;
+    public StaticPacketTrace(TrafficSelector inPacket, ConnectPoint inPoint, Pair<Host, Host> hosts) {
+        this.ingressPacket = inPacket;
+        this.ingressPoint = inPoint;
         completePaths = new ArrayList<>();
         outputsForDevice = new HashMap<>();
         flowsForDevice = new HashMap<>();
+        hitChainsForDevice = new HashMap<>();
         resultMessage = new StringBuilder();
         this.hosts = hosts;
     }
@@ -84,7 +88,7 @@ public class StaticPacketTrace {
      * @return the initial packet in the form of a selector.
      */
     public TrafficSelector getInitialPacket() {
-        return inPacket;
+        return ingressPacket;
     }
 
     /**
@@ -93,7 +97,7 @@ public class StaticPacketTrace {
      * @return the connect point
      */
     public ConnectPoint getInitialConnectPoint() {
-        return in;
+        return ingressPoint;
     }
 
     /**
@@ -122,7 +126,9 @@ public class StaticPacketTrace {
      *
      * @param deviceId   the device
      * @param outputPath the groups in device objects
+     * @deprecated in t3-4.0
      */
+    @Deprecated
     public void addGroupOutputPath(DeviceId deviceId, GroupsInDevice outputPath) {
         if (!outputsForDevice.containsKey(deviceId)) {
             outputsForDevice.put(deviceId, new ArrayList<>());
@@ -131,13 +137,45 @@ public class StaticPacketTrace {
     }
 
     /**
+     * Adds the pipeline hit chain for a given device.
+     *
+     * @param deviceId the device
+     * @param hitChain the hit chain
+     */
+    public void addHitChain(DeviceId deviceId, PipelineTraceableHitChain hitChain) {
+        hitChainsForDevice.compute(deviceId, (k, v) -> {
+            if (v == null) {
+                v = new ArrayList<>();
+            }
+            if (!v.contains(hitChain)) {
+                v.add(hitChain);
+            }
+            return v;
+        });
+    }
+
+    /**
      * Returns all the possible group-based outputs for a given device.
      *
      * @param deviceId the device
      * @return the list of Groups for this device.
+     * @deprecated in t3-4.0
      */
+    @Deprecated
     public List<GroupsInDevice> getGroupOuputs(DeviceId deviceId) {
         return outputsForDevice.get(deviceId) == null ? null : ImmutableList.copyOf(outputsForDevice.get(deviceId));
+    }
+
+    /**
+     * Returns all the possible pipeline hit chains for a given device.
+     *
+     * @param deviceId the device
+     * @return the list of hit chains
+     */
+    public List<PipelineTraceableHitChain> getHitChains(DeviceId deviceId) {
+        List<PipelineTraceableHitChain> hitChains = hitChainsForDevice.get(deviceId);
+        return hitChains == null ? null : ImmutableList.copyOf(hitChains);
+
     }
 
     /**
@@ -163,7 +201,9 @@ public class StaticPacketTrace {
      *
      * @param deviceId the device considered
      * @param flows    the flows
+     * @deprecated in t3-4.0
      */
+    @Deprecated
     public void addFlowsForDevice(DeviceId deviceId, List<FlowEntry> flows) {
         flowsForDevice.put(deviceId, flows);
     }
@@ -173,7 +213,9 @@ public class StaticPacketTrace {
      *
      * @param deviceId the device
      * @return the flows matched
+     * @deprecated in t3-4.0
      */
+    @Deprecated
     public List<FlowEntry> getFlowsForDevice(DeviceId deviceId) {
         return flowsForDevice.getOrDefault(deviceId, ImmutableList.of());
     }
@@ -214,15 +256,15 @@ public class StaticPacketTrace {
         this.success.add(success);
     }
 
-
     @Override
     public String toString() {
         return "StaticPacketTrace{" +
-                "inPacket=" + inPacket +
-                ", in=" + in +
+                "ingressPacket=" + ingressPacket +
+                ", ingressPoint=" + ingressPoint +
                 ", completePaths=" + completePaths +
                 ", outputsForDevice=" + outputsForDevice +
                 ", flowsForDevice=" + flowsForDevice +
+                ", hitChains=" + hitChainsForDevice +
                 ", resultMessage=" + resultMessage +
                 '}';
     }

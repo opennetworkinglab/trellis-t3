@@ -22,6 +22,7 @@ import org.apache.karaf.shell.api.action.Completion;
 import org.apache.karaf.shell.api.action.Option;
 import org.apache.karaf.shell.api.action.lifecycle.Service;
 import org.onlab.packet.IpAddress;
+import org.onlab.util.Generator;
 import org.onosproject.cli.AbstractShellCommand;
 import org.onosproject.cli.PlaceholderCompleter;
 import org.onosproject.cli.net.EthTypeCompleter;
@@ -30,7 +31,6 @@ import org.onosproject.net.flow.criteria.Criterion;
 import org.onosproject.net.flow.criteria.IPCriterion;
 import org.onosproject.t3.api.StaticPacketTrace;
 import org.onosproject.t3.api.TroubleshootService;
-import org.onosproject.t3.impl.Generator;
 
 import java.util.ArrayList;
 import java.util.List;

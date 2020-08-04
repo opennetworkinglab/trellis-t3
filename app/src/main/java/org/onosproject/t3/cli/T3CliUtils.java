@@ -18,9 +18,12 @@ package org.onosproject.t3.cli;
 
 import org.apache.commons.lang.StringUtils;
 import org.onosproject.net.ConnectPoint;
+import org.onosproject.net.DataPlaneEntity;
+import org.onosproject.net.DeviceId;
+import org.onosproject.net.flow.FlowEntry;
 import org.onosproject.net.flow.TrafficTreatment;
+import org.onosproject.net.group.Group;
 import org.onosproject.net.group.GroupBucket;
-import org.onosproject.t3.api.GroupsInDevice;
 import org.onosproject.t3.api.StaticPacketTrace;
 
 import java.util.List;
@@ -88,8 +91,7 @@ final class T3CliUtils {
                 tracePrint.append("\n");
                 tracePrint.append("Input from " + connectPoint);
                 tracePrint.append("\n");
-                tracePrint = printFlows(trace, verbose, connectPoint, tracePrint);
-                tracePrint = printGroups(trace, verbose, connectPoint, tracePrint);
+                tracePrint = printHitChains(trace, verbose, connectPoint.deviceId(), tracePrint);
                 tracePrint.append("\n");
             } else {
                 for (ConnectPoint connectPoint : path) {
@@ -98,11 +100,7 @@ final class T3CliUtils {
                         tracePrint.append("\n");
                         tracePrint.append("    Input from " + connectPoint);
                         tracePrint.append("\n");
-                        tracePrint = printFlows(trace, verbose, connectPoint, tracePrint);
-                    } else {
-                        tracePrint = printGroups(trace, verbose, connectPoint, tracePrint);
-                        tracePrint.append("    Output through " + connectPoint);
-                        tracePrint.append("\n");
+                        tracePrint = printHitChains(trace, verbose, connectPoint.deviceId(), tracePrint);
                     }
                     previous = connectPoint;
                 }
@@ -112,62 +110,71 @@ final class T3CliUtils {
         return tracePrint;
     }
 
-
-    //Prints the flows for a given trace and a specified level of verbosity
-    private static StringBuilder printFlows(StaticPacketTrace trace, boolean verbose, ConnectPoint connectPoint,
-                                            StringBuilder tracePrint) {
-        tracePrint.append("    Flows ");
-        tracePrint.append(trace.getFlowsForDevice(connectPoint.deviceId()).size());
+    private static StringBuilder printHitChains(StaticPacketTrace trace, boolean verbose, DeviceId deviceId,
+                                                        StringBuilder tracePrint) {
+        tracePrint.append("    Hit chains ");
+        tracePrint.append(trace.getHitChains(deviceId).size());
         tracePrint.append("    \n");
-        trace.getFlowsForDevice(connectPoint.deviceId()).forEach(f -> {
-            if (verbose) {
-                tracePrint.append("    " + String.format(FLOW_SHORT_FORMAT, f.state(), f.bytes(), f.packets(),
-                        f.table(), f.priority(), f.selector().criteria(),
-                        printTreatment(f.treatment())));
-                tracePrint.append("\n");
-            } else {
-                tracePrint.append(String.format("       flowId=%s, table=%s, selector=%s", f.id(), f.table(),
-                        f.selector().criteria()));
-                tracePrint.append("\n");
-            }
+        tracePrint.append("    \n");
+        int[] index = {1};
+        trace.getHitChains(deviceId).forEach(hitChain -> {
+            tracePrint.append("    Hit chain " + index[0]++);
+            tracePrint.append("    \n");
+            // Print for each chain the matchable entities first
+            hitChain.getHitChain().forEach(dataPlaneEntity -> {
+                if (dataPlaneEntity.getType() == DataPlaneEntity.Type.FLOWRULE) {
+                    printFlow(dataPlaneEntity.getFlowEntry(), verbose, tracePrint);
+                } else if (dataPlaneEntity.getType() == DataPlaneEntity.Type.GROUP) {
+                    printGroup(dataPlaneEntity.getGroupEntry(), verbose, tracePrint);
+                }
+            });
+            // Then the output packet of the current chain
+            tracePrint.append("    Outgoing Packet " + hitChain.getEgressPacket());
+            tracePrint.append("\n");
+            // The output port of the current chain
+            tracePrint.append("    Output through " + hitChain.getOutputPort());
+            tracePrint.append("\n");
+            // Dropped during the processing ?
+            tracePrint.append("    Dropped " + hitChain.isDropped());
+            tracePrint.append("\n");
+            tracePrint.append("\n");
         });
+
         return tracePrint;
     }
 
-    //Prints the groups for a given trace and a specified level of verbosity
-    private static StringBuilder printGroups(StaticPacketTrace trace, boolean verbose, ConnectPoint connectPoint,
-                                             StringBuilder tracePrint) {
-        List<GroupsInDevice> groupsInDevice = trace.getGroupOuputs(connectPoint.deviceId());
-        if (groupsInDevice != null) {
-            tracePrint.append("    Groups");
-            tracePrint.append("\n");
-            groupsInDevice.forEach(output -> {
-                if (output.getOutput().equals(connectPoint)) {
-                    output.getGroups().forEach(group -> {
-                        if (verbose) {
-                            tracePrint.append("    " + String.format(GROUP_FORMAT, Integer.toHexString(group.id().id()),
-                                    group.state(), group.type(), group.bytes(), group.packets(),
-                                    group.appId().name(), group.referenceCount()));
-                            tracePrint.append("\n");
-                            int i = 0;
-                            for (GroupBucket bucket : group.buckets().buckets()) {
-                                tracePrint.append("    " + String.format(GROUP_BUCKET_FORMAT,
-                                        Integer.toHexString(group.id().id()),
-                                        ++i, bucket.bytes(), bucket.packets(),
-                                        bucket.treatment().allInstructions()));
-                                tracePrint.append("\n");
-                            }
-                        } else {
-                            tracePrint.append("       groupId=" + group.id());
-                            tracePrint.append("\n");
-                        }
-                    });
-                    tracePrint.append("    Outgoing Packet " + output.getFinalPacket());
-                    tracePrint.append("\n");
-                }
-            });
+    // Prints the flows for a given trace and a specified level of verbosity
+    private static void printFlow(FlowEntry f, boolean verbose, StringBuilder tracePrint) {
+        if (verbose) {
+            tracePrint.append("    " + String.format(FLOW_SHORT_FORMAT, f.state(), f.bytes(), f.packets(),
+                    f.table(), f.priority(), f.selector().criteria(),
+                    printTreatment(f.treatment())));
+        } else {
+            tracePrint.append(String.format("       flowId=%s, table=%s, selector=%s", f.id(), f.table(),
+                    f.selector().criteria()));
         }
-        return tracePrint;
+        tracePrint.append("\n");
+    }
+
+    // Prints the groups for a given trace and a specified level of verbosity
+    private static void printGroup(Group group, boolean verbose, StringBuilder tracePrint) {
+        if (verbose) {
+            tracePrint.append("    " + String.format(GROUP_FORMAT, Integer.toHexString(group.id().id()),
+                    group.state(), group.type(), group.bytes(), group.packets(),
+                    group.appId().name(), group.referenceCount()));
+            tracePrint.append("\n");
+            int i = 0;
+            for (GroupBucket bucket : group.buckets().buckets()) {
+                tracePrint.append("    " + String.format(GROUP_BUCKET_FORMAT,
+                        Integer.toHexString(group.id().id()),
+                        ++i, bucket.bytes(), bucket.packets(),
+                        bucket.treatment().allInstructions()));
+                tracePrint.append("\n");
+            }
+        } else {
+            tracePrint.append("       groupId=" + group.id());
+            tracePrint.append("\n");
+        }
     }
 
     private static String printTreatment(TrafficTreatment treatment) {
