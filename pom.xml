@@ -22,7 +22,7 @@
     <parent>
         <groupId>org.onosproject</groupId>
         <artifactId>onos-dependencies</artifactId>
-        <version>2.2.3-b2</version>
+        <version>2.2.4</version>
     </parent>
 
     <groupId>org.onosproject</groupId>
@@ -35,10 +35,6 @@
     <modules>
         <module>app</module>
     </modules>
-
-    <properties>
-        <segmentrouting.version>3.0.0-SNAPSHOT</segmentrouting.version>
-    </properties>
 
     <build>
         <plugins>

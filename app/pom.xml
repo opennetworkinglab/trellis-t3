@@ -51,14 +51,16 @@
             REST API for Trellis troubleshooting tools
         </api.description>
         <api.package>org.onosproject.t3.rest</api.package>
+
+        <trellis.api.version>3.0.0-SNAPSHOT</trellis.api.version>
     </properties>
 
     <dependencies>
         <!-- Trellis API -->
         <dependency>
             <groupId>org.onosproject</groupId>
-            <artifactId>segmentrouting-app</artifactId>
-            <version>${segmentrouting.version}</version>
+            <artifactId>segmentrouting-api</artifactId>
+            <version>${trellis.api.version}</version>
             <scope>provided</scope>
         </dependency>
 
