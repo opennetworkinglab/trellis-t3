@@ -52,7 +52,7 @@
         </api.description>
         <api.package>org.onosproject.t3.rest</api.package>
 
-        <trellis.api.version>3.0.0-SNAPSHOT</trellis.api.version>
+        <trellis.api.version>3.0.0</trellis.api.version>
     </properties>
 
     <dependencies>
