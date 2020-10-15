@@ -19,7 +19,7 @@ package org.onosproject.t3.cli;
 import org.apache.commons.lang.StringUtils;
 import org.onosproject.net.ConnectPoint;
 import org.onosproject.net.DataPlaneEntity;
-import org.onosproject.net.DeviceId;
+import org.onosproject.net.PipelineTraceableHitChain;
 import org.onosproject.net.flow.FlowEntry;
 import org.onosproject.net.flow.TrafficTreatment;
 import org.onosproject.net.group.Group;
@@ -91,7 +91,7 @@ final class T3CliUtils {
                 tracePrint.append("\n");
                 tracePrint.append("Input from " + connectPoint);
                 tracePrint.append("\n");
-                tracePrint = printHitChains(trace, verbose, connectPoint.deviceId(), tracePrint);
+                tracePrint = printHitChains(trace, verbose, connectPoint, tracePrint);
                 tracePrint.append("\n");
             } else {
                 for (ConnectPoint connectPoint : path) {
@@ -100,47 +100,76 @@ final class T3CliUtils {
                         tracePrint.append("\n");
                         tracePrint.append("    Input from " + connectPoint);
                         tracePrint.append("\n");
-                        tracePrint = printHitChains(trace, verbose, connectPoint.deviceId(), tracePrint);
+                    } else {
+                        tracePrint = printHitChains(trace, verbose, connectPoint, tracePrint);
                     }
                     previous = connectPoint;
                 }
             }
             tracePrint.append(StringUtils.leftPad("\n", 100, '-'));
         }
-        return tracePrint;
-    }
-
-    private static StringBuilder printHitChains(StaticPacketTrace trace, boolean verbose, DeviceId deviceId,
-                                                        StringBuilder tracePrint) {
-        tracePrint.append("    Hit chains ");
-        tracePrint.append(trace.getHitChains(deviceId).size());
+        // Once we have printed all the paths - we print the dropped traceable chains
+        List<PipelineTraceableHitChain> droppedHitChains = trace.getDroppedHitChains();
+        if (droppedHitChains.size() == 0) {
+            return tracePrint;
+        }
+        tracePrint.append("    Dropped Hit chains ");
+        tracePrint.append(droppedHitChains.size());
         tracePrint.append("    \n");
         tracePrint.append("    \n");
         int[] index = {1};
-        trace.getHitChains(deviceId).forEach(hitChain -> {
+        for (PipelineTraceableHitChain hitChain : droppedHitChains) {
             tracePrint.append("    Hit chain " + index[0]++);
             tracePrint.append("    \n");
-            // Print for each chain the matchable entities first
-            hitChain.getHitChain().forEach(dataPlaneEntity -> {
-                if (dataPlaneEntity.getType() == DataPlaneEntity.Type.FLOWRULE) {
-                    printFlow(dataPlaneEntity.getFlowEntry(), verbose, tracePrint);
-                } else if (dataPlaneEntity.getType() == DataPlaneEntity.Type.GROUP) {
-                    printGroup(dataPlaneEntity.getGroupEntry(), verbose, tracePrint);
-                }
-            });
-            // Then the output packet of the current chain
-            tracePrint.append("    Outgoing Packet " + hitChain.getEgressPacket());
-            tracePrint.append("\n");
-            // The output port of the current chain
-            tracePrint.append("    Output through " + hitChain.getOutputPort());
-            tracePrint.append("\n");
-            // Dropped during the processing ?
-            tracePrint.append("    Dropped " + hitChain.isDropped());
-            tracePrint.append("\n");
-            tracePrint.append("\n");
-        });
-
+            printHitChain(verbose, hitChain, tracePrint);
+            tracePrint.append(StringUtils.leftPad("\n", 100, '-'));
+        }
         return tracePrint;
+    }
+
+    private static StringBuilder printHitChains(StaticPacketTrace trace, boolean verbose, ConnectPoint outputPort,
+                                                StringBuilder tracePrint) {
+        tracePrint.append("    Hit chains ");
+        List<PipelineTraceableHitChain> hitChainsByDevice = trace.getHitChains(outputPort.deviceId());
+        tracePrint.append(hitChainsByDevice == null ? 0 : trace.getHitChains(outputPort.deviceId()).size());
+        tracePrint.append("    \n");
+        tracePrint.append("    \n");
+        // Do not go further
+        if (hitChainsByDevice == null) {
+            return tracePrint;
+        }
+        int[] index = {1};
+        hitChainsByDevice.forEach(hitChain -> {
+            // Do not print other hit chains
+            if (!outputPort.equals(hitChain.outputPort()) || (hitChain.isDropped())) {
+                return;
+            }
+            tracePrint.append("    Hit chain " + index[0]++);
+            tracePrint.append("    \n");
+            printHitChain(verbose, hitChain, tracePrint);
+        });
+        return tracePrint;
+    }
+
+    private static void printHitChain(boolean verbose, PipelineTraceableHitChain hitChain, StringBuilder tracePrint) {
+        // Print for each chain the matchable entities first
+        hitChain.hitChain().forEach(dataPlaneEntity -> {
+            if (dataPlaneEntity.getType() == DataPlaneEntity.Type.FLOWRULE) {
+                printFlow(dataPlaneEntity.getFlowEntry(), verbose, tracePrint);
+            } else if (dataPlaneEntity.getType() == DataPlaneEntity.Type.GROUP) {
+                printGroup(dataPlaneEntity.getGroupEntry(), verbose, tracePrint);
+            }
+        });
+        // Then the output packet of the current chain
+        tracePrint.append("    Outgoing Packet " + hitChain.egressPacket());
+        tracePrint.append("\n");
+        // The output port of the current chain
+        tracePrint.append("    Output through " + hitChain.outputPort());
+        tracePrint.append("\n");
+        // Dropped during the processing ?
+        tracePrint.append("    Dropped " + hitChain.isDropped());
+        tracePrint.append("\n");
+        tracePrint.append("\n");
     }
 
     // Prints the flows for a given trace and a specified level of verbosity

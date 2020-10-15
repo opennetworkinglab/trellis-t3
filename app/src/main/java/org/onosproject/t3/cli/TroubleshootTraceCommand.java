@@ -17,6 +17,7 @@
 package org.onosproject.t3.cli;
 
 import com.google.common.base.Preconditions;
+import com.google.common.primitives.UnsignedLongs;
 import org.apache.karaf.shell.api.action.Command;
 import org.apache.karaf.shell.api.action.Completion;
 import org.apache.karaf.shell.api.action.Option;
@@ -39,6 +40,9 @@ import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.t3.api.StaticPacketTrace;
 import org.onosproject.t3.api.TroubleshootService;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import static org.onlab.packet.EthType.EtherType;
 
 /**
@@ -49,6 +53,9 @@ import static org.onlab.packet.EthType.EtherType;
         description = "troubleshoots flows and groups between source and destination")
 public class TroubleshootTraceCommand extends AbstractShellCommand {
 
+    private static final Pattern NAMED = Pattern.compile("^(?<deviceid>\\S*)\\/\\[(?<name>\\S*)\\]\\((?<num>\\d+)\\)$");
+
+    private static final Pattern NOT_NAMED = Pattern.compile("^(?<deviceid>\\S*)\\/(?<num>\\d+)$");
 
     private static final String FLOW_SHORT_FORMAT = "    %s, bytes=%s, packets=%s, "
             + "table=%s, priority=%s, selector=%s, treatment=%s";
@@ -141,17 +148,9 @@ public class TroubleshootTraceCommand extends AbstractShellCommand {
             print(service.printNibSummary());
         }
 
-        String[] cpInfo = srcPort.split("/");
-        Preconditions.checkArgument(cpInfo.length == 2, "wrong format of source port");
-        ConnectPoint cp;
-        //Uses input port as a convenience to carry the Controller port, proper flood behaviour is handled in the
+        // Uses input port as a convenience to carry the Controller port, proper flood behaviour is handled in the
         // troubleshoot manager.
-        if (cpInfo[1].equalsIgnoreCase(CONTROLLER)) {
-            cp = new ConnectPoint(DeviceId.deviceId(cpInfo[0]), PortNumber.CONTROLLER);
-        } else {
-            cp = ConnectPoint.deviceConnectPoint(srcPort);
-        }
-
+        ConnectPoint cp = parseConnectPoint(srcPort);
         EtherType type = EtherType.valueOf(ethType.toUpperCase());
 
         //Input Port must be specified
@@ -226,5 +225,28 @@ public class TroubleshootTraceCommand extends AbstractShellCommand {
 
         print("%s", T3CliUtils.printTrace(trace, verbosity1, verbosity2));
 
+    }
+
+    private ConnectPoint parseConnectPoint(String cp) {
+        String deviceId;
+        String name;
+        String num;
+
+        Matcher matcher = NAMED.matcher(cp);
+        // If it is not a named port - try to parse using classic way
+        if (!matcher.matches()) {
+            matcher = NOT_NAMED.matcher(cp);
+            Preconditions.checkArgument(matcher.matches(), "wrong format of source port");
+            deviceId = matcher.group("deviceid");
+            num = matcher.group("num");
+            return new ConnectPoint(DeviceId.deviceId(deviceId),
+                    PortNumber.portNumber(num));
+        }
+        // Named port - decomposes in sub components
+        deviceId = matcher.group("deviceid");
+        name = matcher.group("name");
+        num = matcher.group("num");
+        return new ConnectPoint(DeviceId.deviceId(deviceId),
+                PortNumber.portNumber(UnsignedLongs.parseUnsignedLong(num), name));
     }
 }

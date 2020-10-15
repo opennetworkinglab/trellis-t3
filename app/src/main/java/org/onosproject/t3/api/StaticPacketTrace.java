@@ -26,10 +26,12 @@ import org.onosproject.net.flow.FlowEntry;
 import org.onosproject.net.flow.TrafficSelector;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Encapsulates the result of tracing a packet (traffic selector) through
@@ -175,7 +177,18 @@ public class StaticPacketTrace {
     public List<PipelineTraceableHitChain> getHitChains(DeviceId deviceId) {
         List<PipelineTraceableHitChain> hitChains = hitChainsForDevice.get(deviceId);
         return hitChains == null ? null : ImmutableList.copyOf(hitChains);
+    }
 
+    /**
+     * Return all the dropped hit chains.
+     *
+     * @return the dropped hit chains
+     */
+    public List<PipelineTraceableHitChain> getDroppedHitChains() {
+        return hitChainsForDevice.values().stream()
+                .flatMap(Collection::stream)
+                .filter(PipelineTraceableHitChain::isDropped)
+                .collect(Collectors.toList());
     }
 
     /**

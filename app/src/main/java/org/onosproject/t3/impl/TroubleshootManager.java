@@ -40,6 +40,7 @@ import org.onosproject.net.PipelineTraceableHitChain;
 import org.onosproject.net.PipelineTraceableInput;
 import org.onosproject.net.PipelineTraceableOutput;
 import org.onosproject.net.PipelineTraceableOutput.PipelineTraceableResult;
+import org.onosproject.net.PipelineTraceablePacket;
 import org.onosproject.net.Port;
 import org.onosproject.net.PortNumber;
 import org.onosproject.net.behaviour.PipelineTraceable;
@@ -426,10 +427,10 @@ public class TroubleshootManager implements TroubleshootService {
         //If the trace has outputs we analyze them all
         for (PipelineTraceableHitChain outputPath : trace.getHitChains(in.deviceId())) {
 
-            ConnectPoint cp = outputPath.getOutputPort();
+            ConnectPoint cp = outputPath.outputPort();
             log.debug("Connect point in {}", in);
             log.debug("Output path {}", cp);
-            log.debug("{}", outputPath.getEgressPacket());
+            log.debug("{}", outputPath.egressPacket());
 
             if (outputPath.isDropped()) {
                 continue;
@@ -441,19 +442,19 @@ public class TroubleshootManager implements TroubleshootService {
             Set<Host> hosts = getHosts(trace);
 
             if (in.equals(cp) && trace.getInitialPacket().getCriterion(Criterion.Type.VLAN_VID) != null &&
-                    outputPath.getEgressPacket().getCriterion(Criterion.Type.VLAN_VID) != null
+                    outputPath.egressPacket().packet().getCriterion(Criterion.Type.VLAN_VID) != null
                     && ((VlanIdCriterion) trace.getInitialPacket().getCriterion(Criterion.Type.VLAN_VID)).vlanId()
-                    .equals(((VlanIdCriterion) outputPath.getEgressPacket().getCriterion(Criterion.Type.VLAN_VID))
-                            .vlanId())) {
+                    .equals(((VlanIdCriterion) outputPath.egressPacket()
+                    .packet().getCriterion(Criterion.Type.VLAN_VID)).vlanId())) {
                 if (trace.getHitChains(in.deviceId()).size() == 1 &&
-                        TroubleshootUtils.computePath(completePath, trace, outputPath.getOutputPort())) {
+                        TroubleshootUtils.computePath(completePath, trace, outputPath.outputPort())) {
                     trace.addResultMessage("Connect point out " + cp + " is same as initial input " + in);
                     trace.setSuccess(false);
                 }
             } else if (!Collections.disjoint(hostsList, hosts)) {
                 //If the two host collections contain the same item it means we reached the proper output
                 log.debug("Stopping here because host is expected destination, reached through {}", completePath);
-                if (TroubleshootUtils.computePath(completePath, trace, outputPath.getOutputPort())) {
+                if (TroubleshootUtils.computePath(completePath, trace, outputPath.outputPort())) {
                     trace.addResultMessage("Reached required destination Host " + cp);
                     trace.setSuccess(true);
                 }
@@ -464,7 +465,7 @@ public class TroubleshootManager implements TroubleshootService {
                 NodeId master = mastershipNib.getMasterFor(cp.deviceId());
                 // TODO if we don't need to print master node id, exclude mastership NIB which is used only here
                 trace.addResultMessage(PACKET_TO_CONTROLLER + " " + master.id());
-                TroubleshootUtils.computePath(completePath, trace, outputPath.getOutputPort());
+                TroubleshootUtils.computePath(completePath, trace, outputPath.outputPort());
             } else if (linkNib.getEgressLinks(cp).size() > 0) {
                 //TODO this can be optimized if we use a Tree structure for paths.
                 //if we already have outputs let's check if the one we are considering starts from one of the devices
@@ -503,7 +504,7 @@ public class TroubleshootManager implements TroubleshootService {
                     ConnectPoint dst = link.dst();
                     //change in-port to the dst link in port
                     Builder updatedPacket = DefaultTrafficSelector.builder();
-                    outputPath.getEgressPacket().criteria().forEach(updatedPacket::add);
+                    outputPath.egressPacket().packet().criteria().forEach(updatedPacket::add);
                     updatedPacket.add(Criteria.matchInPort(dst.port()));
                     log.debug("DST Connect Point {}", dst);
                     //build the elements for that device
@@ -511,15 +512,15 @@ public class TroubleshootManager implements TroubleshootService {
                     //continue the trace along the path
                     getTrace(completePath, dst, trace, isDualHomed);
                 }
-            } else if (edgePortNib.isEdgePoint(outputPath.getOutputPort()) &&
+            } else if (edgePortNib.isEdgePoint(outputPath.outputPort()) &&
                     trace.getInitialPacket().getCriterion(Criterion.Type.ETH_DST) != null &&
                     ((EthCriterion) trace.getInitialPacket().getCriterion(Criterion.Type.ETH_DST))
                             .mac().isMulticast()) {
-                trace.addResultMessage("Packet is multicast and reached output " + outputPath.getOutputPort() +
+                trace.addResultMessage("Packet is multicast and reached output " + outputPath.outputPort() +
                         " which is enabled and is edge port");
                 trace.setSuccess(true);
-                TroubleshootUtils.computePath(completePath, trace, outputPath.getOutputPort());
-                if (!hasOtherOutput(in.deviceId(), trace, outputPath.getOutputPort())) {
+                TroubleshootUtils.computePath(completePath, trace, outputPath.outputPort());
+                if (!hasOtherOutput(in.deviceId(), trace, outputPath.outputPort())) {
                     return trace;
                 }
             } else if (deviceNib.getPort(cp) != null && deviceNib.getPort(cp).isEnabled()) {
@@ -528,10 +529,10 @@ public class TroubleshootManager implements TroubleshootService {
                 //We treat as correct output only if it's not LLDP or BDDP
                 if (!(ethTypeCriterion.ethType().equals(EtherType.LLDP.ethType())
                         && !ethTypeCriterion.ethType().equals(EtherType.BDDP.ethType()))) {
-                    if (TroubleshootUtils.computePath(completePath, trace, outputPath.getOutputPort())) {
+                    if (TroubleshootUtils.computePath(completePath, trace, outputPath.outputPort())) {
                         if (hostsList.isEmpty()) {
-                            trace.addResultMessage("Packet is " + ((EthTypeCriterion) outputPath.getEgressPacket()
-                                    .getCriterion(Criterion.Type.ETH_TYPE)).ethType() + " and reached " +
+                            trace.addResultMessage("Packet is " + ((EthTypeCriterion) outputPath.egressPacket()
+                                    .packet().getCriterion(Criterion.Type.ETH_TYPE)).ethType() + " and reached " +
                                     cp + " with no hosts connected ");
                         } else {
                             IpAddress ipAddress = null;
@@ -547,7 +548,7 @@ public class TroubleshootManager implements TroubleshootService {
                                 if (hostsList.stream().anyMatch(host -> host.ipAddresses().contains(finalIpAddress)) ||
                                         hostNib.getHostsByIp(finalIpAddress).isEmpty()) {
                                     trace.addResultMessage("Packet is " +
-                                            ((EthTypeCriterion) outputPath.getEgressPacket()
+                                            ((EthTypeCriterion) outputPath.egressPacket().packet()
                                                     .getCriterion(Criterion.Type.ETH_TYPE)).ethType() +
                                             " and reached " + cp + " with hosts " + hostsList);
                                 } else {
@@ -556,9 +557,9 @@ public class TroubleshootManager implements TroubleshootService {
                                     trace.setSuccess(false);
                                 }
                             } else {
-                                trace.addResultMessage("Packet is " + ((EthTypeCriterion) outputPath.getEgressPacket()
-                                        .getCriterion(Criterion.Type.ETH_TYPE)).ethType() + " and reached " +
-                                        cp + " with hosts " + hostsList);
+                                trace.addResultMessage("Packet is " + ((EthTypeCriterion) outputPath.egressPacket()
+                                        .packet().getCriterion(Criterion.Type.ETH_TYPE)).ethType()
+                                        + " and reached " + cp + " with hosts " + hostsList);
                             }
                         }
                         trace.setSuccess(true);
@@ -592,7 +593,7 @@ public class TroubleshootManager implements TroubleshootService {
      */
     private boolean hasOtherOutput(DeviceId inDeviceId, StaticPacketTrace trace, ConnectPoint cp) {
         return trace.getHitChains(inDeviceId).stream().filter(groupsInDevice ->
-                !groupsInDevice.getOutputPort().equals(cp)).count() > 0;
+                !groupsInDevice.outputPort().equals(cp)).count() > 0;
     }
 
     /**
@@ -699,22 +700,20 @@ public class TroubleshootManager implements TroubleshootService {
         }
 
         // Applies pipeline processing
-        PipelineTraceableInput input = new PipelineTraceableInput(packet, in, dataPlaneEntities);
+        PipelineTraceableInput input = new PipelineTraceableInput(new PipelineTraceablePacket(packet),
+                in, dataPlaneEntities);
         PipelineTraceableOutput output = pipelineMatchable.apply(input);
 
         // Update the trace
-        List<PipelineTraceableHitChain> hitChains = output.getHitChains();
+        List<PipelineTraceableHitChain> hitChains = output.hitChains();
         hitChains.forEach(hitChain -> trace.addHitChain(in.deviceId(), hitChain));
-        trace.addResultMessage(output.getLog());
+        trace.addResultMessage(output.log());
 
         // If there was an error set the success to false
-        if (output.getResult() != PipelineTraceableResult.SUCCESS) {
+        if (output.result() != PipelineTraceableResult.SUCCESS) {
             TroubleshootUtils.computePath(completePath, trace, null);
             trace.setSuccess(false);
         }
-
-        log.info("Logs -> {}", output.getLog());
-        hitChains.forEach(hitChain -> log.info("HitChain -> {}", hitChain));
 
         // We are done!
         return trace;
@@ -764,7 +763,7 @@ public class TroubleshootManager implements TroubleshootService {
             enabledPorts.forEach(port -> {
                 PipelineTraceableHitChain hitChain = new PipelineTraceableHitChain(
                         new ConnectPoint(port.element().id(), port.number()), ImmutableList.of(),
-                        trace.getInitialPacket());
+                        new PipelineTraceablePacket(trace.getInitialPacket()));
                 trace.addHitChain(in.deviceId(), hitChain);
             });
             return trace;

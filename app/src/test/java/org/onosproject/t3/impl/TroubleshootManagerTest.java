@@ -169,10 +169,10 @@ public class TroubleshootManagerTest {
                 traceSuccess.resultMessage().contains(PACKET_TO_CONTROLLER));
         assertTrue("Master should be Master1",
                 traceSuccess.resultMessage().contains(MASTER_1));
-        ConnectPoint connectPoint = traceSuccess.getHitChains(ARP_FLOW_DEVICE).get(0).getOutputPort();
+        ConnectPoint connectPoint = traceSuccess.getHitChains(ARP_FLOW_DEVICE).get(0).outputPort();
         assertEquals("Packet Should go to CONTROLLER", PortNumber.CONTROLLER, connectPoint.port());
         VlanIdCriterion vlanIdCriterion = (VlanIdCriterion) traceSuccess.getHitChains(ARP_FLOW_DEVICE).get(0)
-                .getEgressPacket().getCriterion(Criterion.Type.VLAN_VID);
+                .egressPacket().packet().getCriterion(Criterion.Type.VLAN_VID);
         assertEquals("VlanId should be None", VlanId.NONE, vlanIdCriterion.vlanId());
         log.info("trace {}", traceSuccess.resultMessage());
     }
@@ -188,10 +188,10 @@ public class TroubleshootManagerTest {
                 traceSuccess.resultMessage().contains(PACKET_TO_CONTROLLER));
         assertTrue("Master should be Master1",
                 traceSuccess.resultMessage().contains(MASTER_1));
-        ConnectPoint connectPoint = traceSuccess.getHitChains(ARP_FLOW_VLAN_DEVICE).get(0).getOutputPort();
+        ConnectPoint connectPoint = traceSuccess.getHitChains(ARP_FLOW_VLAN_DEVICE).get(0).outputPort();
         assertEquals("Packet Should go to CONTROLLER", PortNumber.CONTROLLER, connectPoint.port());
         VlanIdCriterion vlanIdCriterion = (VlanIdCriterion) traceSuccess.getHitChains(ARP_FLOW_VLAN_DEVICE).get(0)
-                .getEgressPacket().getCriterion(Criterion.Type.VLAN_VID);
+                .egressPacket().packet().getCriterion(Criterion.Type.VLAN_VID);
         assertEquals("VlanId should be None", VlanId.NONE, vlanIdCriterion.vlanId());
         log.info("trace {}", traceSuccess.resultMessage());
     }
@@ -240,7 +240,7 @@ public class TroubleshootManagerTest {
                 DUAL_FLOW_OUT_CP, 1, 1);
         // Verifying Vlan
         Criterion criterion = traceSuccess.getHitChains(DUAL_FLOW_DEVICE).get(0).
-                getEgressPacket().getCriterion(Criterion.Type.VLAN_VID);
+                egressPacket().packet().getCriterion(Criterion.Type.VLAN_VID);
         assertNotNull("Packet Should have Vlan", criterion);
         VlanIdCriterion vlanIdCriterion = (VlanIdCriterion) criterion;
         assertEquals("Vlan should be 100", VlanId.vlanId((short) 100), vlanIdCriterion.vlanId());
@@ -259,14 +259,14 @@ public class TroubleshootManagerTest {
                 GROUP_FLOW_OUT_CP, 1, 1);
         // Verify the output of the test
         assertTrue("Wrong Output Group", traceSuccess.getHitChains(GROUP_FLOW_DEVICE)
-                .get(0).getHitChain().contains(new DataPlaneEntity(GROUP)));
+                .get(0).hitChain().contains(new DataPlaneEntity(GROUP)));
         assertEquals("Packet should not have MPLS Label", EthType.EtherType.IPV4.ethType(),
-                ((EthTypeCriterion) traceSuccess.getHitChains(GROUP_FLOW_DEVICE)
-                        .get(0).getEgressPacket().getCriterion(Criterion.Type.ETH_TYPE)).ethType());
-        assertNull("Packet should not have MPLS Label", traceSuccess.getHitChains(GROUP_FLOW_DEVICE)
-                .get(0).getEgressPacket().getCriterion(Criterion.Type.MPLS_LABEL));
-        assertNull("Packet should not have MPLS BoS", traceSuccess.getHitChains(GROUP_FLOW_DEVICE)
-                .get(0).getEgressPacket().getCriterion(Criterion.Type.MPLS_BOS));
+                ((EthTypeCriterion) traceSuccess.getHitChains(GROUP_FLOW_DEVICE).get(0)
+                        .egressPacket().packet().getCriterion(Criterion.Type.ETH_TYPE)).ethType());
+        assertNull("Packet should not have MPLS Label", traceSuccess.getHitChains(GROUP_FLOW_DEVICE).get(0)
+                .egressPacket().packet().getCriterion(Criterion.Type.MPLS_LABEL));
+        assertNull("Packet should not have MPLS BoS", traceSuccess.getHitChains(GROUP_FLOW_DEVICE).get(0)
+                .egressPacket().packet().getCriterion(Criterion.Type.MPLS_BOS));
     }
 
     /**
@@ -293,10 +293,10 @@ public class TroubleshootManagerTest {
                 TOPO_FLOW_3_DEVICE, TOPO_FLOW_3_OUT_CP, 2, 1);
         // Verify the multiple output actions
         assertTrue("Incorrect groups",
-                traceSuccess.getHitChains(TOPO_GROUP_FLOW_DEVICE).get(0).getHitChain()
+                traceSuccess.getHitChains(TOPO_GROUP_FLOW_DEVICE).get(0).hitChain()
                         .contains(new DataPlaneEntity(TOPO_GROUP)));
         assertTrue("Incorrect bucket",
-                traceSuccess.getHitChains(TOPO_GROUP_FLOW_DEVICE).get(1).getHitChain()
+                traceSuccess.getHitChains(TOPO_GROUP_FLOW_DEVICE).get(1).hitChain()
                         .contains(new DataPlaneEntity(TOPO_GROUP)));
     }
 
@@ -334,7 +334,7 @@ public class TroubleshootManagerTest {
                 traceSuccess.resultMessage().contains("Packet goes to the controller"));
         assertTrue("Master should be Master1",
                 traceSuccess.resultMessage().contains(MASTER_1));
-        ConnectPoint connectPoint = traceSuccess.getHitChains(LLDP_FLOW_DEVICE).get(0).getOutputPort();
+        ConnectPoint connectPoint = traceSuccess.getHitChains(LLDP_FLOW_DEVICE).get(0).outputPort();
         assertEquals("Packet Should go to CONTROLLER", PortNumber.CONTROLLER, connectPoint.port());
         log.info("trace {}", traceSuccess.resultMessage());
     }
@@ -358,9 +358,9 @@ public class TroubleshootManagerTest {
         assertTrue("Trace should be successful",
                 traceSuccess.resultMessage().contains("reached output"));
         assertEquals("Incorrect Output CP", MULTICAST_OUT_CP_2,
-                traceSuccess.getHitChains(MULTICAST_GROUP_FLOW_DEVICE).get(0).getOutputPort());
+                traceSuccess.getHitChains(MULTICAST_GROUP_FLOW_DEVICE).get(0).outputPort());
         assertEquals("Incorrect Output CP", MULTICAST_OUT_CP,
-                traceSuccess.getHitChains(MULTICAST_GROUP_FLOW_DEVICE).get(1).getOutputPort());
+                traceSuccess.getHitChains(MULTICAST_GROUP_FLOW_DEVICE).get(1).outputPort());
     }
 
     /**
@@ -396,7 +396,7 @@ public class TroubleshootManagerTest {
         assertTrue("Trace should be successful",
                 traceSuccess.resultMessage().contains("Reached required destination Host"));
         assertEquals("Incorrect Output CP", out,
-                traceSuccess.getHitChains(deviceId).get(0).getOutputPort());
+                traceSuccess.getHitChains(deviceId).get(0).outputPort());
 
         return traceSuccess;
     }
